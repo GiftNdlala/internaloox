@@ -1,0 +1,222 @@
+from django.shortcuts import render
+from django.http import JsonResponse
+from rest_framework import status, viewsets, filters
+from rest_framework.decorators import api_view, permission_classes, action
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from django_filters.rest_framework import DjangoFilterBackend
+from django.utils import timezone
+from .models import Order, Customer, PaymentProof, OrderHistory
+from .serializers import (
+    OrderSerializer, OrderListSerializer, OrderStatusUpdateSerializer,
+    CustomerSerializer, PaymentProofSerializer, OrderHistorySerializer
+)
+
+class CustomerViewSet(viewsets.ModelViewSet):
+    queryset = Customer.objects.all()
+    serializer_class = CustomerSerializer
+    permission_classes = [AllowAny]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name', 'phone', 'email']
+    ordering_fields = ['created_at', 'name']
+    ordering = ['-created_at']
+
+    def list(self, request, *args, **kwargs):
+        if not Customer.objects.exists():
+            # Return mock data for frontend testing
+            mock_data = [
+                {
+                    'id': 1,
+                    'name': 'John Doe',
+                    'phone': '08012345678',
+                    'email': 'john@example.com',
+                    'address': '123 Main St',
+                    'created_at': '2024-07-01T10:00:00Z',
+                    'updated_at': '2024-07-01T10:00:00Z',
+                },
+                {
+                    'id': 2,
+                    'name': 'Jane Smith',
+                    'phone': '08087654321',
+                    'email': 'jane@example.com',
+                    'address': '456 Side Ave',
+                    'created_at': '2024-07-02T11:00:00Z',
+                    'updated_at': '2024-07-02T11:00:00Z',
+                }
+            ]
+            return Response(mock_data)
+        return super().list(request, *args, **kwargs)
+
+class OrderViewSet(viewsets.ModelViewSet):
+    queryset = Order.objects.all()
+    permission_classes = [AllowAny]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['payment_status', 'order_status', 'created_by', 'assigned_to_warehouse', 'assigned_to_delivery']
+    search_fields = ['order_number', 'customer__name', 'product_name']
+    ordering_fields = ['created_at', 'expected_delivery_date', 'total_amount']
+    ordering = ['-created_at']
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return OrderListSerializer
+        elif self.action in ['update', 'partial_update']:
+            return OrderStatusUpdateSerializer
+        return OrderSerializer
+
+    def get_queryset(self):
+        return Order.objects.all()
+
+    def list(self, request, *args, **kwargs):
+        if not Order.objects.exists():
+            # Return mock data for frontend testing
+            mock_data = [
+                {
+                    'id': 1,
+                    'order_number': 'OOX000101',
+                    'customer': {
+                        'id': 1,
+                        'name': 'John Doe',
+                        'phone': '08012345678',
+                        'email': 'john@example.com',
+                        'address': '123 Main St',
+                        'created_at': '2024-07-01T10:00:00Z',
+                        'updated_at': '2024-07-01T10:00:00Z',
+                    },
+                    'product_name': 'Custom Sofa',
+                    'product_description': 'Blue, 3-seater',
+                    'quantity': 2,
+                    'unit_price': 'R50000.00',
+                    'total_amount': 'R100000.00',
+                    'deposit_amount': 'R50000.00',
+                    'balance_amount': 'R50000.00',
+                    'payment_status': 'deposit_only',
+                    'order_status': 'pending',
+                    'order_date': '2024-07-01T10:00:00Z',
+                    'expected_delivery_date': '2024-07-10',
+                    'actual_delivery_date': None,
+                    'created_by': None,
+                    'assigned_to_warehouse': None,
+                    'assigned_to_delivery': None,
+                    'admin_notes': '',
+                    'warehouse_notes': '',
+                    'delivery_notes': '',
+                    'created_at': '2024-07-01T10:00:00Z',
+                    'updated_at': '2024-07-01T10:00:00Z',
+                }
+            ]
+            return Response(mock_data)
+        return super().list(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def update_status(self, request, pk=None):
+        order = self.get_object()
+        serializer = OrderStatusUpdateSerializer(order, data=request.data, partial=True, context={'request': request})
+        
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def assign_warehouse(self, request, pk=None):
+        order = self.get_object()
+        warehouse_user_id = request.data.get('warehouse_user_id')
+        
+        if warehouse_user_id:
+            try:
+                from users.models import User
+                warehouse_user = User.objects.get(id=warehouse_user_id, role='warehouse')
+                order.assigned_to_warehouse = warehouse_user
+                order.save()
+                
+                OrderHistory.objects.create(
+                    order=order,
+                    user=request.user,
+                    action="Assigned to warehouse",
+                    details=f"Assigned to {warehouse_user.username}"
+                )
+                
+                return Response({'message': 'Order assigned to warehouse successfully'})
+            except User.DoesNotExist:
+                return Response({'error': 'Invalid warehouse user'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        return Response({'error': 'warehouse_user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def assign_delivery(self, request, pk=None):
+        order = self.get_object()
+        delivery_user_id = request.data.get('delivery_user_id')
+        
+        if delivery_user_id:
+            try:
+                from users.models import User
+                delivery_user = User.objects.get(id=delivery_user_id, role='delivery')
+                order.assigned_to_delivery = delivery_user
+                order.save()
+                
+                OrderHistory.objects.create(
+                    order=order,
+                    user=request.user,
+                    action="Assigned to delivery",
+                    details=f"Assigned to {delivery_user.username}"
+                )
+                
+                return Response({'message': 'Order assigned to delivery successfully'})
+            except User.DoesNotExist:
+                return Response({'error': 'Invalid delivery user'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        return Response({'error': 'delivery_user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+class PaymentProofViewSet(viewsets.ModelViewSet):
+    queryset = PaymentProof.objects.all()
+    serializer_class = PaymentProofSerializer
+    permission_classes = [AllowAny]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['order', 'payment_type']
+    ordering = ['-uploaded_at']
+
+    def list(self, request, *args, **kwargs):
+        if not PaymentProof.objects.exists():
+            # Return mock data for frontend testing
+            mock_data = [
+                {
+                    'id': 1,
+                    'order': 1,
+                    'payment_type': 'deposit',
+                    'amount': 'R50000.00',
+                    'payment_date': '2024-07-01',
+                    'reference_number': 'REF123',
+                    'notes': '',
+                    'uploaded_by': None,
+                    'uploaded_at': '2024-07-01T12:00:00Z',
+                }
+            ]
+            return Response(mock_data)
+        return super().list(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        serializer.save(uploaded_by=self.request.user)
+
+class OrderHistoryViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = OrderHistory.objects.all()
+    serializer_class = OrderHistorySerializer
+    permission_classes = [AllowAny]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['order', 'user', 'action']
+    ordering = ['-timestamp']
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def dashboard_stats(request):
+    # Return mock stats for frontend testing
+    return Response({
+        'total_orders': 25,
+        'pending_orders': 8,
+        'in_production': 12,
+        'ready_for_delivery': 5,
+        'overdue_orders': 2
+    }) 
