@@ -8,34 +8,55 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from .models import User
 from .serializers import UserSerializer
+from rest_framework.exceptions import PermissionDenied
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
+import logging
+logger = logging.getLogger(__name__)
+from rest_framework_simplejwt.tokens import RefreshToken
 
+@method_decorator(csrf_exempt, name='dispatch')
 class LoginView(APIView):
+    authentication_classes = []  # Disable SessionAuthentication (and thus CSRF) for this endpoint
     permission_classes = [AllowAny]
     
     def post(self, request):
-        username = request.data.get('username')
-        password = request.data.get('password')
-        
-        if not username or not password:
+        try:
+            username = request.data.get('username')
+            password = request.data.get('password')
+            
+            if not username or not password:
+                logger.warning("Missing username or password")
+                return Response({
+                    'error': 'Username and password are required'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            user = authenticate(username=username, password=password)
+            
+            if user is None:
+                logger.warning(f"Invalid credentials for username: {username}")
+                return Response({
+                    'error': 'Invalid credentials'
+                }, status=status.HTTP_401_UNAUTHORIZED)
+            
+            if not user.is_active:
+                logger.warning(f"Inactive user tried to login: {username}")
+                return Response({
+                    'error': 'Account is disabled'
+                }, status=status.HTTP_401_UNAUTHORIZED)
+            
+            # Generate JWT tokens
+            refresh = RefreshToken.for_user(user)
+            serializer = UserSerializer(user)
+            logger.info(f"User logged in: {username}")
             return Response({
-                'error': 'Username and password are required'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        user = authenticate(username=username, password=password)
-        
-        if user is None:
-            return Response({
-                'error': 'Invalid credentials'
-            }, status=status.HTTP_401_UNAUTHORIZED)
-        
-        if not user.is_active:
-            return Response({
-                'error': 'Account is disabled'
-            }, status=status.HTTP_401_UNAUTHORIZED)
-        
-        login(request, user)
-        serializer = UserSerializer(user)
-        return Response(serializer.data)
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+                'user': serializer.data
+            })
+        except Exception as e:
+            logger.error(f"Login error: {str(e)}")
+            return Response({'error': f'Login failed: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
@@ -54,10 +75,24 @@ class CurrentUserView(APIView):
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
-        # Users can only see other users in their role or admins
-        if self.request.user.is_admin:
+        if self.request.user.is_admin or self.request.user.is_owner:
             return User.objects.all()
-        return User.objects.filter(role=self.request.user.role) 
+        return User.objects.filter(role=self.request.user.role)
+
+    def create(self, request, *args, **kwargs):
+        if not request.user.is_owner:
+            raise PermissionDenied('Only owners can create users.')
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        if not request.user.is_owner:
+            raise PermissionDenied('Only owners can update users.')
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if not request.user.is_owner:
+            raise PermissionDenied('Only owners can delete users.')
+        return super().destroy(request, *args, **kwargs) 

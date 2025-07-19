@@ -3,6 +3,7 @@ from django.db import models
 
 class User(AbstractUser):
     ROLE_CHOICES = [
+        ('owner', 'Owner'),
         ('admin', 'Admin'),
         ('warehouse', 'Warehouse'),
         ('delivery', 'Delivery'),
@@ -29,3 +30,7 @@ class User(AbstractUser):
     @property
     def is_delivery(self):
         return self.role == 'delivery' 
+    
+    @property
+    def is_owner(self):
+        return self.role == 'owner' 

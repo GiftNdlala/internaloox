@@ -1,6 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
+from django.views.decorators.csrf import csrf_exempt
 
 app_name = 'users'
 

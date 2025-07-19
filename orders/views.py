@@ -1,4 +1,6 @@
 from django.shortcuts import render
+import sys
+import traceback
 from django.http import JsonResponse
 from rest_framework import status, viewsets, filters
 from rest_framework.decorators import api_view, permission_classes, action
@@ -7,10 +9,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
-from .models import Order, Customer, PaymentProof, OrderHistory
+from .models import Order, Customer, PaymentProof, OrderHistory, Product, Color, Fabric
 from .serializers import (
     OrderSerializer, OrderListSerializer, OrderStatusUpdateSerializer,
-    CustomerSerializer, PaymentProofSerializer, OrderHistorySerializer
+    CustomerSerializer, PaymentProofSerializer, OrderHistorySerializer,
+    ProductSerializer, ColorSerializer, FabricSerializer
 )
 
 class CustomerViewSet(viewsets.ModelViewSet):
@@ -58,10 +61,9 @@ class OrderViewSet(viewsets.ModelViewSet):
     ordering = ['-created_at']
 
     def get_serializer_class(self):
-        if self.action == 'list':
+        # Always use OrderSerializer for retrieve, update, partial_update, and create
+        if self.action in ['list']:
             return OrderListSerializer
-        elif self.action in ['update', 'partial_update']:
-            return OrderStatusUpdateSerializer
         return OrderSerializer
 
     def get_queryset(self):
@@ -109,7 +111,29 @@ class OrderViewSet(viewsets.ModelViewSet):
         return super().list(request, *args, **kwargs)
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        try:
+            items_data = self.request.data.get('items', [])
+            serializer.save(
+                created_by=self.request.user,
+                items_data=items_data
+            )
+        except Exception as e:
+            print("ORDER CREATE ERROR:", e)
+            traceback.print_exc(file=sys.stdout)
+            # Optionally, you can raise or return a more informative error
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'detail': f'Order creation failed: {str(e)}'})
+
+    def perform_update(self, serializer):
+        try:
+            items_data = self.request.data.get('items', [])
+            serializer.save(items_data=items_data)
+        except Exception as e:
+            print("ORDER UPDATE ERROR:", e)
+            import sys, traceback
+            traceback.print_exc(file=sys.stdout)
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'detail': f'Order update failed: {str(e)}'})
 
     @action(detail=True, methods=['post'])
     def update_status(self, request, pk=None):
@@ -208,6 +232,58 @@ class OrderHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['order', 'user', 'action']
     ordering = ['-timestamp']
+
+class ProductViewSet(viewsets.ModelViewSet):
+    queryset = Product.objects.all()
+    serializer_class = ProductSerializer
+    permission_classes = [AllowAny]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name', 'description']
+    ordering_fields = ['price', 'created_at']
+    ordering = ['-created_at']
+
+    def list(self, request, *args, **kwargs):
+        if not Product.objects.exists():
+            # Return mock data for frontend testing
+            mock_data = [
+                {
+                    'id': 1,
+                    'name': 'Custom Sofa',
+                    'description': 'Blue, 3-seater',
+                    'price': 'R50000.00',
+                    'stock_quantity': 10,
+                    'created_at': '2024-07-01T10:00:00Z',
+                    'updated_at': '2024-07-01T10:00:00Z',
+                },
+                {
+                    'id': 2,
+                    'name': 'Office Chair',
+                    'description': 'Ergonomic, adjustable height',
+                    'price': 'R25000.00',
+                    'stock_quantity': 20,
+                    'created_at': '2024-07-02T11:00:00Z',
+                    'updated_at': '2024-07-02T11:00:00Z',
+                }
+            ]
+            return Response(mock_data)
+        return super().list(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+class ColorViewSet(viewsets.ModelViewSet):
+    queryset = Color.objects.all()
+    serializer_class = ColorSerializer
+    permission_classes = [AllowAny]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    ordering = ['name']
+
+class FabricViewSet(viewsets.ModelViewSet):
+    queryset = Fabric.objects.all()
+    serializer_class = FabricSerializer
+    permission_classes = [AllowAny]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    ordering = ['name']
 
 @api_view(['GET'])
 @permission_classes([AllowAny])

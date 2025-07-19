@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Order, Customer, PaymentProof, OrderHistory
+from .models import Order, Customer, PaymentProof, OrderHistory, Product
 
 @admin.register(Customer)
 class CustomerAdmin(admin.ModelAdmin):
@@ -11,19 +11,19 @@ class CustomerAdmin(admin.ModelAdmin):
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
     list_display = [
-        'order_number', 'customer', 'product_name', 'total_amount',
+        'order_number', 'customer', 'products_list', 'total_amount',
         'payment_status', 'order_status', 'expected_delivery_date', 'created_by'
     ]
     list_filter = [
         'payment_status', 'order_status', 'expected_delivery_date', 'created_at'
     ]
-    search_fields = ['order_number', 'customer__name', 'product_name']
+    search_fields = ['order_number', 'customer__name']
     readonly_fields = ['order_number', 'total_amount', 'balance_amount', 'created_at', 'updated_at']
     ordering = ['-created_at']
     
     fieldsets = (
         ('Order Information', {
-            'fields': ('order_number', 'customer', 'product_name', 'product_description', 'quantity', 'unit_price')
+            'fields': ('order_number', 'customer')
         }),
         ('Financial Details', {
             'fields': ('total_amount', 'deposit_amount', 'balance_amount', 'payment_status')
@@ -44,6 +44,10 @@ class OrderAdmin(admin.ModelAdmin):
         })
     )
 
+    def products_list(self, obj):
+        return ", ".join([item.product.name for item in obj.items.all()])
+    products_list.short_description = "Products"
+
 @admin.register(PaymentProof)
 class PaymentProofAdmin(admin.ModelAdmin):
     list_display = ['order', 'payment_type', 'amount', 'uploaded_by', 'uploaded_at']
@@ -59,3 +63,9 @@ class OrderHistoryAdmin(admin.ModelAdmin):
     search_fields = ['order__order_number', 'action', 'user__username']
     readonly_fields = ['order', 'user', 'action', 'details', 'timestamp']
     ordering = ['-timestamp'] 
+
+@admin.register(Product)
+class ProductAdmin(admin.ModelAdmin):
+    list_display = ['name', 'base_price', 'stock', 'created_at']
+    search_fields = ['name', 'description']
+    ordering = ['name'] 

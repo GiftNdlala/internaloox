@@ -17,13 +17,53 @@ class Customer(models.Model):
     def __str__(self):
         return f"{self.name} ({self.phone})"
 
+class Product(models.Model):
+    PRODUCT_TYPE_CHOICES = [
+        ('Couch', 'Couch'),
+        ('Mattress', 'Mattress'),
+        ('Base', 'Base'),
+        ('CoffeeTable', 'Coffee Table'),
+        ('TVStand', 'TV Stand'),
+        ('Set', 'Set'),
+        ('Accessory', 'Accessory'),
+        ('Other', 'Other'),
+    ]
+    name = models.CharField(max_length=200, blank=True, null=True)
+    product_type = models.CharField(max_length=32, choices=PRODUCT_TYPE_CHOICES, blank=True, null=True)
+    category = models.CharField(max_length=100, blank=True, null=True)
+    model_code = models.CharField(max_length=32, unique=True, blank=True, null=True)
+    description = models.TextField(blank=True, null=True)
+    base_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    production_time_days = models.PositiveIntegerField(default=0, blank=True, null=True)
+    default_quantity_unit = models.CharField(max_length=32, default='unit', blank=True, null=True)
+    available_for_order = models.BooleanField(default=True)
+    stock = models.PositiveIntegerField(default=0, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        ordering = ['name']
+        unique_together = ('name', 'model_code')
+    def __str__(self):
+        return f"{self.name} ({self.model_code})"
+
+class ProductOption(models.Model):
+    OPTION_TYPE_CHOICES = [
+        ('color', 'Color'),
+        ('fabric', 'Fabric'),
+    ]
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='options')
+    option_type = models.CharField(max_length=20, choices=OPTION_TYPE_CHOICES)
+    value = models.CharField(max_length=100)
+    def __str__(self):
+        return f"{self.product.name} - {self.option_type}: {self.value}"
+
+# Update Order: remove product fields
 class Order(models.Model):
     PAYMENT_STATUS_CHOICES = [
         ('deposit_only', 'Deposit Only'),
         ('fifty_percent', '50% Paid'),
         ('fully_paid', 'Fully Paid'),
     ]
-    
     ORDER_STATUS_CHOICES = [
         ('pending', 'Pending'),
         ('confirmed', 'Confirmed (Deposit Paid)'),
@@ -33,56 +73,30 @@ class Order(models.Model):
         ('delivered', 'Delivered'),
         ('cancelled', 'Cancelled'),
     ]
-    
-    # Order details
     order_number = models.CharField(max_length=20, unique=True)
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='orders')
-    
-    # Product details
-    product_name = models.CharField(max_length=200)
-    product_description = models.TextField(blank=True)
-    quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
-    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
-    
-    # Financial details
+    # Remove product_name, product_description, quantity, unit_price
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)
     deposit_amount = models.DecimalField(max_digits=10, decimal_places=2)
     balance_amount = models.DecimalField(max_digits=10, decimal_places=2)
     payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='deposit_only')
-    
-    # Order status
     order_status = models.CharField(max_length=20, choices=ORDER_STATUS_CHOICES, default='pending')
-    
-    # Dates
     order_date = models.DateTimeField(auto_now_add=True)
     expected_delivery_date = models.DateField()
     actual_delivery_date = models.DateField(null=True, blank=True)
-    
-    # User tracking
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_orders')
     assigned_to_warehouse = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='warehouse_orders')
     assigned_to_delivery = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='delivery_orders')
-    
-    # Notes
     admin_notes = models.TextField(blank=True)
     warehouse_notes = models.TextField(blank=True)
     delivery_notes = models.TextField(blank=True)
-    
-    # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
     class Meta:
         ordering = ['-created_at']
-    
     def __str__(self):
         return f"Order #{self.order_number} - {self.customer.name}"
-    
     def save(self, *args, **kwargs):
-        # Auto-calculate total and balance
-        self.total_amount = self.unit_price * self.quantity
-        self.balance_amount = self.total_amount - self.deposit_amount
-        
         # Auto-generate order number if not provided
         if not self.order_number:
             last_order = Order.objects.order_by('-id').first()
@@ -91,24 +105,28 @@ class Order(models.Model):
                 self.order_number = f"OOX{last_number + 1:06d}"
             else:
                 self.order_number = "OOX000001"
-        
         super().save(*args, **kwargs)
-    
-    @property
-    def is_deposit_paid(self):
-        return self.payment_status in ['deposit_only', 'fifty_percent', 'fully_paid']
-    
-    @property
-    def can_mark_ready(self):
-        return self.order_status in ['confirmed', 'in_production'] and self.is_deposit_paid
-    
-    @property
-    def can_deliver(self):
-        return self.order_status == 'ready_for_delivery'
-    
-    @property
-    def is_overdue(self):
-        return self.expected_delivery_date < timezone.now().date() and self.order_status not in ['delivered', 'cancelled']
+
+class Color(models.Model):
+    name = models.CharField(max_length=50, unique=True)
+    def __str__(self):
+        return self.name
+
+class Fabric(models.Model):
+    name = models.CharField(max_length=50, unique=True)
+    def __str__(self):
+        return self.name
+
+class OrderItem(models.Model):
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey(Product, on_delete=models.PROTECT)
+    quantity = models.PositiveIntegerField(default=1)
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    color = models.ForeignKey(Color, on_delete=models.SET_NULL, null=True, blank=True)
+    fabric = models.ForeignKey(Fabric, on_delete=models.SET_NULL, null=True, blank=True)
+    # Add more customization fields as needed
+    def __str__(self):
+        return f"{self.product.name} x{self.quantity} for {self.order.order_number}"
 
 class PaymentProof(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='payment_proofs')
