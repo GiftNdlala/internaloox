@@ -17,5 +17,12 @@ python manage.py collectstatic --no-input
 
 # Run migrations (only if DATABASE_URL is set)
 if [ -n "$DATABASE_URL" ]; then
-    python manage.py migrate
+    echo "Testing database connection..."
+    python manage.py check --database default || echo "Database connection failed, skipping migrations for now"
+    if python manage.py check --database default; then
+        echo "Database connection successful, running migrations..."
+        python manage.py migrate
+    else
+        echo "Skipping migrations due to database connection issues"
+    fi
 fi
