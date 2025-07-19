@@ -2,8 +2,11 @@
 # exit on error
 set -o errexit
 
-# Install dependencies
-pip install -r requirements.txt
+# Force clear pip cache
+pip cache purge || true
+
+# Install dependencies with no cache
+pip install --no-cache-dir -r requirements.txt
 
 # Set default environment variables for build
 export SECRET_KEY=${SECRET_KEY:-"temp-secret-key-for-build"}
