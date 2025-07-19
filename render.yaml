@@ -5,7 +5,7 @@ services:
     env: python
     plan: free
     buildCommand: "./build.sh"
-    startCommand: "gunicorn oox_system.wsgi:application --host 0.0.0.0 --port $PORT"
+    startCommand: "gunicorn oox_system.wsgi:application -b 0.0.0.0:$PORT"
     healthCheckPath: "/admin/"
     envVars:
       - key: SECRET_KEY
