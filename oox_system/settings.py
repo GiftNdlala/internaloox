@@ -11,7 +11,7 @@ SECRET_KEY = config('SECRET_KEY', default='django-insecure-your-secret-key-here'
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=True, cast=bool)
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '.render.com']
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '*.render.com', 'internaloox.onrender.com']
 
 # Application definition
 INSTALLED_APPS = [
@@ -135,6 +135,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
     "https://internaloox-frontend.onrender.com",
+    "https://your-frontend-domain.com",
 ]
 
 # In production, allow all origins from .onrender.com
