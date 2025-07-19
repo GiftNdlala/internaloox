@@ -36,7 +36,8 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
 class OrderSerializer(serializers.ModelSerializer):
     customer = CustomerSerializer(read_only=True)
-    customer_id = serializers.IntegerField(write_only=True)
+    customer_id = serializers.IntegerField(write_only=True, required=False)
+    customer_update = serializers.DictField(write_only=True, required=False)  # For customer updates
     created_by = UserSerializer(read_only=True)
     assigned_to_warehouse = UserSerializer(read_only=True)
     assigned_to_delivery = UserSerializer(read_only=True)
@@ -54,34 +55,88 @@ class OrderSerializer(serializers.ModelSerializer):
         ]
     
     def create(self, validated_data):
-        print("ORDER validated_data:", validated_data)
+        print("ORDER CREATE - validated_data:", validated_data)
+        print("ORDER CREATE - initial_data:", self.initial_data)
+        
         # Ensure total_amount, deposit_amount, balance_amount are Decimal
         for field in ['total_amount', 'deposit_amount', 'balance_amount']:
             if field in validated_data and validated_data[field] is not None:
                 validated_data[field] = Decimal(str(validated_data[field]))
+        
+        # Get items data from context or initial_data
         items_data = self.context.get('items_data', [])
+        if not items_data and 'items' in self.initial_data:
+            items_data = self.initial_data['items']
+        
+        print("ORDER CREATE - items_data:", items_data)
+        
         validated_data.pop('items_data', None)
         validated_data['created_by'] = self.context['request'].user
         order = super().create(validated_data)
+        
+        # Create order items
         for item_data in items_data:
+            print("ORDER CREATE - Creating item:", item_data)
             OrderItem.objects.create(
                 order=order,
                 product_id=item_data['product'],
                 quantity=item_data['quantity'],
                 unit_price=item_data['unit_price'],
                 color_id=item_data.get('color'),
-                fabric_id=item_data.get('fabric')
+                fabric_id=item_data.get('fabric'),
+                product_description=item_data.get('product_description', '')
             )
+        
+        print("ORDER CREATE - Order created successfully with", len(items_data), "items")
         return order
 
     def update(self, instance, validated_data):
-        # Update customer info if present
-        customer_data = self.initial_data.get('customer', {})
+        print("ORDER UPDATE - initial_data:", self.initial_data)
+        print("ORDER UPDATE - validated_data:", validated_data)
+        print("ORDER UPDATE - initial_data keys:", list(self.initial_data.keys()))
+        print("ORDER UPDATE - request.data:", self.context.get('request').data)
+        
+        # Update customer info if present - check multiple sources
+        customer_data = None
+        
+        # Try customer_update field first
+        if 'customer_update' in self.initial_data:
+            customer_data = self.initial_data['customer_update']
+            print("ORDER UPDATE - Found customer_update in initial_data")
+        elif 'customer_update' in self.context.get('request').data:
+            customer_data = self.context.get('request').data['customer_update']
+            print("ORDER UPDATE - Found customer_update in request.data")
+        elif 'customer' in self.initial_data:
+            customer_data = self.initial_data['customer']
+            print("ORDER UPDATE - Found customer in initial_data")
+        elif 'customer' in self.context.get('request').data:
+            customer_data = self.context.get('request').data['customer']
+            print("ORDER UPDATE - Found customer in request.data")
+        
+        # If still no customer data, try to get it from validated_data
+        if not customer_data and 'customer_update' in validated_data:
+            customer_data = validated_data.pop('customer_update')
+            print("ORDER UPDATE - Found customer_update in validated_data")
+        elif not customer_data and 'customer_data' in validated_data:
+            customer_data = validated_data.pop('customer_data')
+            print("ORDER UPDATE - Found customer_data in validated_data")
+        elif not customer_data and 'customer_data' in self.initial_data:
+            customer_data = self.initial_data['customer_data']
+            print("ORDER UPDATE - Found customer_data in initial_data")
+        
+        print("ORDER UPDATE - customer_data:", customer_data)
+        
         if customer_data:
             customer = instance.customer
+            print("ORDER UPDATE - Updating customer fields:", list(customer_data.keys()))
             for field, value in customer_data.items():
-                setattr(customer, field, value)
+                if hasattr(customer, field) and field != 'id':  # Don't update the ID
+                    setattr(customer, field, value)
+                    print(f"ORDER UPDATE - Set {field} = {value}")
             customer.save()
+            print("ORDER UPDATE - Customer updated successfully")
+        else:
+            print("ORDER UPDATE - No customer data found in any source")
 
         # Update order fields
         for attr, value in validated_data.items():

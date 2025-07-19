@@ -9,11 +9,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
-from .models import Order, Customer, PaymentProof, OrderHistory, Product, Color, Fabric
+from .models import Order, Customer, PaymentProof, OrderHistory, Product, Color, Fabric, OrderItem
 from .serializers import (
     OrderSerializer, OrderListSerializer, OrderStatusUpdateSerializer,
     CustomerSerializer, PaymentProofSerializer, OrderHistorySerializer,
-    ProductSerializer, ColorSerializer, FabricSerializer
+    ProductSerializer, ColorSerializer, FabricSerializer, OrderItemSerializer
 )
 
 class CustomerViewSet(viewsets.ModelViewSet):
@@ -56,7 +56,7 @@ class OrderViewSet(viewsets.ModelViewSet):
     permission_classes = [AllowAny]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['payment_status', 'order_status', 'created_by', 'assigned_to_warehouse', 'assigned_to_delivery']
-    search_fields = ['order_number', 'customer__name', 'product_name']
+    search_fields = ['order_number', 'customer__name']
     ordering_fields = ['created_at', 'expected_delivery_date', 'total_amount']
     ordering = ['-created_at']
 
@@ -65,6 +65,16 @@ class OrderViewSet(viewsets.ModelViewSet):
         if self.action in ['list']:
             return OrderListSerializer
         return OrderSerializer
+
+    def retrieve(self, request, *args, **kwargs):
+        """Override retrieve to add debugging"""
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        data = serializer.data
+        print(f"RETRIEVING ORDER {instance.id}:")
+        print(f"Order items count: {len(data.get('items', []))}")
+        print(f"Order items data: {data.get('items', [])}")
+        return Response(data)
 
     def get_queryset(self):
         return Order.objects.all()
@@ -284,6 +294,24 @@ class FabricViewSet(viewsets.ModelViewSet):
     permission_classes = [AllowAny]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     ordering = ['name']
+
+class OrderItemViewSet(viewsets.ModelViewSet):
+    queryset = OrderItem.objects.all()
+    serializer_class = OrderItemSerializer
+    permission_classes = [AllowAny]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['order', 'product', 'color', 'fabric']
+    ordering = ['-id']
+
+    def list(self, request, *args, **kwargs):
+        """List order items with optional order filter"""
+        order_id = request.query_params.get('order')
+        if order_id:
+            queryset = self.queryset.filter(order_id=order_id)
+        else:
+            queryset = self.queryset
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
 @api_view(['GET'])
 @permission_classes([AllowAny])

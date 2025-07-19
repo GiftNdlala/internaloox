@@ -124,6 +124,7 @@ class OrderItem(models.Model):
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     color = models.ForeignKey(Color, on_delete=models.SET_NULL, null=True, blank=True)
     fabric = models.ForeignKey(Fabric, on_delete=models.SET_NULL, null=True, blank=True)
+    product_description = models.TextField(blank=True, null=True)  # Add product description field
     # Add more customization fields as needed
     def __str__(self):
         return f"{self.product.name} x{self.quantity} for {self.order.order_number}"

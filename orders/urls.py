@@ -12,6 +12,7 @@ router.register(r'order-history', views.OrderHistoryViewSet)
 router.register(r'products', views.ProductViewSet)
 router.register(r'colors', views.ColorViewSet)
 router.register(r'fabrics', views.FabricViewSet)
+router.register(r'order-items', views.OrderItemViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),
