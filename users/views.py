@@ -99,6 +99,7 @@ class UserViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs) 
 
 @api_view(['POST'])
+@permission_classes([AllowAny])
 @csrf_exempt
 def create_admin_user(request):
     """Temporary endpoint to create admin users - REMOVE IN PRODUCTION"""
