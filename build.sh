@@ -21,8 +21,8 @@ if [ -n "$DATABASE_URL" ]; then
     python manage.py check --database default || echo "Database connection failed, skipping migrations for now"
     if python manage.py check --database default; then
         echo "Database connection successful, running migrations..."
-        python manage.py makemigrations
-        python manage.py migrate
+        # Run existing migrations only (no makemigrations to avoid interactive prompts)
+        python manage.py migrate --no-input
         echo "Setting up MVP reference data..."
         python manage.py setup_mvp_data || echo "MVP data setup failed or already exists"
     else
