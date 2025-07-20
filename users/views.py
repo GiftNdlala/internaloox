@@ -108,7 +108,16 @@ def create_admin_user(request):
         username = data.get('username')
         email = data.get('email')
         password = data.get('password')
-        role = data.get('role', 'customer')
+        role = data.get('role', 'admin')
+        
+        # Map role names to lowercase (matching model choices)
+        role_mapping = {
+            'Owner': 'owner',
+            'Admin': 'admin', 
+            'Warehouse': 'warehouse',
+            'Delivery': 'delivery'
+        }
+        role = role_mapping.get(role, role.lower())
         
         # Check if user already exists
         if User.objects.filter(username=username).exists():
@@ -122,7 +131,7 @@ def create_admin_user(request):
             role=role
         )
         
-        if role == 'Owner':
+        if role == 'owner':
             user.is_staff = True
             user.is_superuser = True
             user.save()
