@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Order, Customer, PaymentProof, OrderHistory, Product, Color, Fabric, OrderItem
+from .models import Order, Customer, PaymentProof, OrderHistory, Product, Color, Fabric, OrderItem, ColorReference, FabricReference
 from users.serializers import UserSerializer
 from decimal import Decimal
 
@@ -215,4 +215,15 @@ class ColorSerializer(serializers.ModelSerializer):
 class FabricSerializer(serializers.ModelSerializer):
     class Meta:
         model = Fabric
+        fields = '__all__'
+
+# MVP Reference Serializers
+class ColorReferenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ColorReference
+        fields = '__all__'
+
+class FabricReferenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FabricReference
         fields = '__all__' 

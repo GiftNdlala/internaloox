@@ -9,11 +9,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
-from .models import Order, Customer, PaymentProof, OrderHistory, Product, Color, Fabric, OrderItem
+from .models import Order, Customer, PaymentProof, OrderHistory, Product, Color, Fabric, OrderItem, ColorReference, FabricReference
 from .serializers import (
     OrderSerializer, OrderListSerializer, OrderStatusUpdateSerializer,
     CustomerSerializer, PaymentProofSerializer, OrderHistorySerializer,
-    ProductSerializer, ColorSerializer, FabricSerializer, OrderItemSerializer
+    ProductSerializer, ColorSerializer, FabricSerializer, OrderItemSerializer,
+    ColorReferenceSerializer, FabricReferenceSerializer
 )
 
 class CustomerViewSet(viewsets.ModelViewSet):
@@ -281,6 +282,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
 
+# Legacy Color/Fabric ViewSets (for compatibility)
 class ColorViewSet(viewsets.ModelViewSet):
     queryset = Color.objects.all()
     serializer_class = ColorSerializer
@@ -294,6 +296,21 @@ class FabricViewSet(viewsets.ModelViewSet):
     permission_classes = [AllowAny]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     ordering = ['name']
+
+# MVP Reference ViewSets (for physical boards)
+class ColorReferenceViewSet(viewsets.ModelViewSet):
+    queryset = ColorReference.objects.all()
+    serializer_class = ColorReferenceSerializer
+    permission_classes = [AllowAny]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    ordering = ['color_code']
+
+class FabricReferenceViewSet(viewsets.ModelViewSet):
+    queryset = FabricReference.objects.all()
+    serializer_class = FabricReferenceSerializer
+    permission_classes = [AllowAny]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    ordering = ['fabric_letter']
 
 class OrderItemViewSet(viewsets.ModelViewSet):
     queryset = OrderItem.objects.all()
