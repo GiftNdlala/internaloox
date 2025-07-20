@@ -14,6 +14,7 @@ from django.utils.decorators import method_decorator
 import logging
 logger = logging.getLogger(__name__)
 from rest_framework_simplejwt.tokens import RefreshToken
+import json
 
 @method_decorator(csrf_exempt, name='dispatch')
 class LoginView(APIView):
@@ -96,3 +97,40 @@ class UserViewSet(viewsets.ModelViewSet):
         if not request.user.is_owner:
             raise PermissionDenied('Only owners can delete users.')
         return super().destroy(request, *args, **kwargs) 
+
+@api_view(['POST'])
+@csrf_exempt
+def create_admin_user(request):
+    """Temporary endpoint to create admin users - REMOVE IN PRODUCTION"""
+    try:
+        data = json.loads(request.body)
+        username = data.get('username')
+        email = data.get('email')
+        password = data.get('password')
+        role = data.get('role', 'customer')
+        
+        # Check if user already exists
+        if User.objects.filter(username=username).exists():
+            return JsonResponse({'error': 'User already exists'}, status=400)
+        
+        # Create user with proper password hashing
+        user = User.objects.create_user(
+            username=username,
+            email=email,
+            password=password,
+            role=role
+        )
+        
+        if role == 'Owner':
+            user.is_staff = True
+            user.is_superuser = True
+            user.save()
+        
+        return JsonResponse({
+            'success': True,
+            'message': f'User {username} created successfully',
+            'user_id': user.id
+        })
+        
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500) 
