@@ -19,32 +19,49 @@ class Customer(models.Model):
 
 class Product(models.Model):
     PRODUCT_TYPE_CHOICES = [
-        ('Couch', 'Couch'),
-        ('Mattress', 'Mattress'),
-        ('Base', 'Base'),
-        ('CoffeeTable', 'Coffee Table'),
-        ('TVStand', 'TV Stand'),
-        ('Set', 'Set'),
-        ('Accessory', 'Accessory'),
-        ('Other', 'Other'),
+        ('set', 'Set'),
+        ('single', 'Single Item'),
     ]
-    name = models.CharField(max_length=200, blank=True, null=True)
-    product_type = models.CharField(max_length=32, choices=PRODUCT_TYPE_CHOICES, blank=True, null=True)
-    category = models.CharField(max_length=100, blank=True, null=True)
+    
+    PRODUCT_CATEGORY_CHOICES = [
+        ('couch', 'Couch'),
+        ('mattress', 'Mattress'),
+        ('base', 'Base'),
+        ('coffee_table', 'Coffee Table'),
+        ('tv_stand', 'TV Stand'),
+        ('accessory', 'Accessory'),
+        ('other', 'Other'),
+    ]
+    
+    # MVP Required Fields
+    product_name = models.CharField(max_length=200)
+    product_type = models.CharField(max_length=32, choices=PRODUCT_TYPE_CHOICES)
+    product_category = models.CharField(max_length=100, choices=PRODUCT_CATEGORY_CHOICES)
+    default_fabric_letter = models.CharField(max_length=1, help_text="Default fabric code (A-Z)")
+    default_color_code = models.CharField(max_length=2, help_text="Default color code (1-99)")
+    unit_cost = models.DecimalField(max_digits=10, decimal_places=2, help_text="Cost to produce")
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2, help_text="Selling price")
+    estimated_build_time = models.PositiveIntegerField(help_text="Days to build")
+    is_active = models.BooleanField(default=True)
+    date_added = models.DateTimeField(auto_now_add=True)
+    
+    # Additional fields for existing compatibility
     model_code = models.CharField(max_length=32, unique=True, blank=True, null=True)
     description = models.TextField(blank=True, null=True)
-    base_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
-    production_time_days = models.PositiveIntegerField(default=0, blank=True, null=True)
-    default_quantity_unit = models.CharField(max_length=32, default='unit', blank=True, null=True)
-    available_for_order = models.BooleanField(default=True)
-    stock = models.PositiveIntegerField(default=0, blank=True, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
     class Meta:
-        ordering = ['name']
-        unique_together = ('name', 'model_code')
+        ordering = ['product_name']
+        
     def __str__(self):
-        return f"{self.name} ({self.model_code})"
+        return f"{self.product_name} ({self.product_category})"
+    
+    @property
+    def profit_margin(self):
+        """Calculate profit margin percentage"""
+        if self.unit_cost > 0:
+            return ((self.unit_price - self.unit_cost) / self.unit_cost) * 100
+        return 0
 
 class ProductOption(models.Model):
     OPTION_TYPE_CHOICES = [
@@ -57,16 +74,23 @@ class ProductOption(models.Model):
     def __str__(self):
         return f"{self.product.name} - {self.option_type}: {self.value}"
 
-# Update Order: remove product fields
 class Order(models.Model):
     PAYMENT_STATUS_CHOICES = [
         ('deposit_only', 'Deposit Only'),
         ('fifty_percent', '50% Paid'),
         ('fully_paid', 'Fully Paid'),
     ]
+    
+    # MVP Production Status Choices
+    PRODUCTION_STATUS_CHOICES = [
+        ('not_started', '🟡 Not Started'),
+        ('in_production', '🟠 In Production'),
+        ('ready_for_delivery', '🟢 Ready for Delivery'),
+    ]
+    
     ORDER_STATUS_CHOICES = [
         ('pending', 'Pending'),
-        ('confirmed', 'Confirmed (Deposit Paid)'),
+        ('confirmed', 'Confirmed'),
         ('in_production', 'In Production'),
         ('ready_for_delivery', 'Ready for Delivery'),
         ('out_for_delivery', 'Out for Delivery'),
@@ -74,13 +98,19 @@ class Order(models.Model):
         ('cancelled', 'Cancelled'),
     ]
     order_number = models.CharField(max_length=20, unique=True)
-    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='orders')
-    # Remove product_name, product_description, quantity, unit_price
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='orders', blank=True, null=True)
+    customer_name = models.CharField(max_length=200, blank=True, null=True, help_text="Optional internal tracking")
+    
+    # MVP Financial Fields
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)
-    deposit_amount = models.DecimalField(max_digits=10, decimal_places=2)
-    balance_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    balance_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='deposit_only')
     order_status = models.CharField(max_length=20, choices=ORDER_STATUS_CHOICES, default='pending')
+    
+    # MVP Production Tracking
+    production_status = models.CharField(max_length=20, choices=PRODUCTION_STATUS_CHOICES, default='not_started')
+    delivery_deadline = models.DateField(help_text="Target delivery date")
     order_date = models.DateTimeField(auto_now_add=True)
     expected_delivery_date = models.DateField()
     actual_delivery_date = models.DateField(null=True, blank=True)
@@ -107,6 +137,34 @@ class Order(models.Model):
                 self.order_number = "OOX000001"
         super().save(*args, **kwargs)
 
+# MVP Reference Tables for Physical Boards
+class ColorReference(models.Model):
+    """Master color reference with codes for physical board"""
+    color_code = models.CharField(max_length=2, unique=True, help_text="Number code (1-99)")
+    color_name = models.CharField(max_length=50)
+    hex_color = models.CharField(max_length=7, blank=True, null=True, help_text="For digital reference #FFFFFF")
+    is_active = models.BooleanField(default=True)
+    
+    class Meta:
+        ordering = ['color_code']
+    
+    def __str__(self):
+        return f"{self.color_code} - {self.color_name}"
+
+class FabricReference(models.Model):
+    """Master fabric reference with letter codes for physical board"""
+    fabric_letter = models.CharField(max_length=1, unique=True, help_text="Letter code (A-Z)")
+    fabric_name = models.CharField(max_length=50)
+    fabric_type = models.CharField(max_length=50, blank=True, null=True, help_text="e.g., Suede, Leather, Cotton")
+    is_active = models.BooleanField(default=True)
+    
+    class Meta:
+        ordering = ['fabric_letter']
+    
+    def __str__(self):
+        return f"{self.fabric_letter} - {self.fabric_name}"
+
+# Legacy models for compatibility
 class Color(models.Model):
     name = models.CharField(max_length=50, unique=True)
     def __str__(self):
@@ -122,12 +180,44 @@ class OrderItem(models.Model):
     product = models.ForeignKey(Product, on_delete=models.PROTECT)
     quantity = models.PositiveIntegerField(default=1)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    
+    # MVP Fabric and Color using codes
+    assigned_fabric_letter = models.CharField(max_length=1, help_text="Fabric code from reference board")
+    assigned_color_code = models.CharField(max_length=2, help_text="Color code from reference board")
+    
+    # Legacy fields for compatibility
     color = models.ForeignKey(Color, on_delete=models.SET_NULL, null=True, blank=True)
     fabric = models.ForeignKey(Fabric, on_delete=models.SET_NULL, null=True, blank=True)
-    product_description = models.TextField(blank=True, null=True)  # Add product description field
-    # Add more customization fields as needed
+    product_description = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        verbose_name = "Order Item"
+        verbose_name_plural = "Order Items"
+    
     def __str__(self):
-        return f"{self.product.name} x{self.quantity} for {self.order.order_number}"
+        return f"{self.product.product_name} x{self.quantity} (Fabric: {self.assigned_fabric_letter}, Color: {self.assigned_color_code})"
+    
+    @property
+    def total_price(self):
+        return self.quantity * self.unit_price
+    
+    @property  
+    def fabric_name(self):
+        """Get fabric name from reference"""
+        try:
+            fabric_ref = FabricReference.objects.get(fabric_letter=self.assigned_fabric_letter)
+            return fabric_ref.fabric_name
+        except FabricReference.DoesNotExist:
+            return f"Fabric {self.assigned_fabric_letter}"
+    
+    @property
+    def color_name(self):
+        """Get color name from reference"""
+        try:
+            color_ref = ColorReference.objects.get(color_code=self.assigned_color_code)
+            return color_ref.color_name
+        except ColorReference.DoesNotExist:
+            return f"Color {self.assigned_color_code}"
 
 class PaymentProof(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='payment_proofs')
