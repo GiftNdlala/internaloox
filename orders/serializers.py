@@ -178,13 +178,17 @@ class OrderSerializer(serializers.ModelSerializer):
 
 class OrderListSerializer(serializers.ModelSerializer):
     customer = CustomerSerializer(read_only=True)
+    customer_name = serializers.CharField(read_only=True)
     
     class Meta:
         model = Order
         fields = [
-            'id', 'order_number', 'customer', 'total_amount', 
-            'payment_status', 'order_status', 'expected_delivery_date', 
-            'created_at'
+            'id', 'order_number', 'customer', 'customer_name',
+            'order_date', 'expected_delivery_date', 'delivery_deadline',
+            'order_status', 'production_status', 'payment_status',
+            'deposit_amount', 'balance_amount', 'total_amount',
+            'notes', 'admin_notes', 'warehouse_notes', 'delivery_notes',
+            'created_at', 'updated_at'
         ]
 
 class OrderStatusUpdateSerializer(serializers.ModelSerializer):

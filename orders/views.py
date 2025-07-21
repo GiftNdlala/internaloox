@@ -309,11 +309,128 @@ class OrderItemViewSet(viewsets.ModelViewSet):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def dashboard_stats(request):
-    # Return mock stats for frontend testing
+    """
+    Comprehensive dashboard statistics for OOX Furniture frontend
+    """
+    from django.db.models import Count, Sum, Q
+    from datetime import datetime, timedelta
+    from django.utils import timezone
+    
+    # Calculate date ranges
+    today = timezone.now().date()
+    week_ago = today - timedelta(days=7)
+    month_ago = today - timedelta(days=30)
+    
+    # Order Statistics
+    total_orders = Order.objects.count()
+    pending_orders = Order.objects.filter(order_status='pending').count()
+    confirmed_orders = Order.objects.filter(order_status='confirmed').count()
+    in_production = Order.objects.filter(production_status='in_production').count()
+    ready_for_delivery = Order.objects.filter(production_status='ready_for_delivery').count()
+    delivered_orders = Order.objects.filter(order_status='delivered').count()
+    
+    # Overdue orders (past delivery deadline)
+    overdue_orders = Order.objects.filter(
+        delivery_deadline__lt=today,
+        order_status__in=['pending', 'confirmed', 'in_production', 'ready_for_delivery']
+    ).count()
+    
+    # Customer Statistics
+    from .models import Customer
+    total_customers = Customer.objects.count()
+    new_customers_week = Customer.objects.filter(created_at__gte=week_ago).count()
+    active_customers = Customer.objects.filter(
+        orders__order_date__gte=month_ago
+    ).distinct().count()
+    
+    # Financial Statistics
+    total_revenue = Order.objects.aggregate(
+        total=Sum('total_amount')
+    )['total'] or 0
+    
+    pending_payments = Order.objects.filter(
+        payment_status__in=['pending', 'partial', 'overdue']
+    ).aggregate(total=Sum('balance_amount'))['total'] or 0
+    
+    revenue_this_month = Order.objects.filter(
+        order_date__gte=month_ago
+    ).aggregate(total=Sum('total_amount'))['total'] or 0
+    
+    # Production Statistics
+    not_started = Order.objects.filter(production_status='not_started').count()
+    cutting = Order.objects.filter(production_status='cutting').count()
+    sewing = Order.objects.filter(production_status='sewing').count()
+    finishing = Order.objects.filter(production_status='finishing').count()
+    quality_check = Order.objects.filter(production_status='quality_check').count()
+    completed = Order.objects.filter(production_status='completed').count()
+    
+    # User/Team Statistics
+    from users.models import User
+    total_users = User.objects.count()
+    active_users = User.objects.filter(is_active=True).count()
+    owners = User.objects.filter(role='owner').count()
+    admins = User.objects.filter(role='admin').count()
+    warehouse_users = User.objects.filter(role='warehouse').count()
+    delivery_users = User.objects.filter(role='delivery').count()
+    
+    # Recent Activity
+    recent_orders = Order.objects.filter(
+        order_date__gte=week_ago
+    ).count()
+    
     return Response({
-        'total_orders': 25,
-        'pending_orders': 8,
-        'in_production': 12,
-        'ready_for_delivery': 5,
-        'overdue_orders': 2
+        # Core Order Stats
+        'total_orders': total_orders,
+        'pending_orders': pending_orders,
+        'confirmed_orders': confirmed_orders,
+        'in_production': in_production,
+        'ready_for_delivery': ready_for_delivery,
+        'delivered_orders': delivered_orders,
+        'overdue_orders': overdue_orders,
+        
+        # Customer Stats
+        'total_customers': total_customers,
+        'new_customers_week': new_customers_week,
+        'active_customers': active_customers,
+        
+        # Financial Stats
+        'total_revenue': float(total_revenue),
+        'pending_payments': float(pending_payments),
+        'revenue_this_month': float(revenue_this_month),
+        
+        # Production Pipeline Stats
+        'production_stats': {
+            'not_started': not_started,
+            'cutting': cutting,
+            'sewing': sewing,
+            'finishing': finishing,
+            'quality_check': quality_check,
+            'completed': completed,
+        },
+        
+        # Team Stats
+        'team_stats': {
+            'total_users': total_users,
+            'active_users': active_users,
+            'owners': owners,
+            'admins': admins,
+            'warehouse_users': warehouse_users,
+            'delivery_users': delivery_users,
+        },
+        
+        # Recent Activity
+        'recent_activity': {
+            'orders_this_week': recent_orders,
+        },
+        
+        # Quick Metrics for Dashboard Cards
+        'quick_metrics': {
+            'orders_today': Order.objects.filter(order_date__date=today).count(),
+            'deliveries_today': Order.objects.filter(
+                expected_delivery_date=today,
+                order_status='ready_for_delivery'
+            ).count(),
+            'urgent_orders': overdue_orders,
+            'production_capacity': in_production + cutting + sewing + finishing,
+        }
     }) 

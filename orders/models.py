@@ -55,15 +55,24 @@ class ProductOption(models.Model):
 
 class Order(models.Model):
     PAYMENT_STATUS_CHOICES = [
-        ('deposit_only', 'Deposit Only'),
-        ('fifty_percent', '50% Paid'),
-        ('fully_paid', 'Fully Paid'),
+        ('pending', 'Pending'),
+        ('partial', 'Partial'),
+        ('paid', 'Paid'),
+        ('overdue', 'Overdue'),
+        ('deposit_only', 'Deposit Only'),  # Legacy
+        ('fifty_percent', '50% Paid'),     # Legacy
+        ('fully_paid', 'Fully Paid'),     # Legacy
     ]
     
-    # MVP Production Status Choices
+    # MVP Production Status Choices (Enhanced for Frontend)
     PRODUCTION_STATUS_CHOICES = [
         ('not_started', '🟡 Not Started'),
-        ('in_production', '🟠 In Production'),
+        ('cutting', '🔧 Cutting'),
+        ('sewing', '🧵 Sewing'),
+        ('finishing', '🎨 Finishing'),
+        ('quality_check', '🔍 Quality Check'),
+        ('completed', '✅ Completed'),
+        ('in_production', '🟠 In Production'),  # Generic fallback
         ('ready_for_delivery', '🟢 Ready for Delivery'),
     ]
     
