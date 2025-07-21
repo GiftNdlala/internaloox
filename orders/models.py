@@ -33,35 +33,57 @@ class Product(models.Model):
         ('other', 'Other'),
     ]
     
-    # MVP Required Fields
-    product_name = models.CharField(max_length=200)
-    product_type = models.CharField(max_length=32, choices=PRODUCT_TYPE_CHOICES)
-    product_category = models.CharField(max_length=100, choices=PRODUCT_CATEGORY_CHOICES)
-    default_fabric_letter = models.CharField(max_length=1, help_text="Default fabric code (A-Z)")
-    default_color_code = models.CharField(max_length=2, help_text="Default color code (1-99)")
-    unit_cost = models.DecimalField(max_digits=10, decimal_places=2, help_text="Cost to produce")
-    unit_price = models.DecimalField(max_digits=10, decimal_places=2, help_text="Selling price")
-    estimated_build_time = models.PositiveIntegerField(help_text="Days to build")
+    # Core fields (compatible with existing database)
+    name = models.CharField(max_length=200, default='Unnamed Product')  # Fallback for existing data
+    description = models.TextField(blank=True, null=True)
+    price = models.CharField(max_length=50, default='R0.00')  # String format for compatibility
+    stock_quantity = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    # MVP Optional Fields (for new functionality)
+    product_name = models.CharField(max_length=200, blank=True, null=True)
+    product_type = models.CharField(max_length=32, choices=PRODUCT_TYPE_CHOICES, blank=True, null=True)
+    product_category = models.CharField(max_length=100, choices=PRODUCT_CATEGORY_CHOICES, blank=True, null=True)
+    default_fabric_letter = models.CharField(max_length=1, blank=True, null=True, help_text="Default fabric code (A-Z)")
+    default_color_code = models.CharField(max_length=2, blank=True, null=True, help_text="Default color code (1-99)")
+    unit_cost = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True, help_text="Cost to produce")
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True, help_text="Selling price")
+    estimated_build_time = models.PositiveIntegerField(blank=True, null=True, help_text="Days to build")
     is_active = models.BooleanField(default=True)
-    date_added = models.DateTimeField(auto_now_add=True)
+    date_added = models.DateTimeField(blank=True, null=True)
     
     # Additional fields for existing compatibility
     model_code = models.CharField(max_length=32, unique=True, blank=True, null=True)
-    description = models.TextField(blank=True, null=True)
-    updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
-        ordering = ['product_name']
+        ordering = ['-created_at']
         
     def __str__(self):
-        return f"{self.product_name} ({self.product_category})"
+        # Use product_name if available, otherwise fall back to name
+        display_name = self.product_name or self.name
+        return f"{display_name}"
+    
+    @property
+    def display_name(self):
+        """Return the best available name for this product"""
+        return self.product_name or self.name
+    
+    @property
+    def display_price(self):
+        """Return the best available price for this product"""
+        if self.unit_price:
+            return f"R{self.unit_price:.2f}"
+        return self.price or "R0.00"
     
     @property
     def profit_margin(self):
-        """Calculate profit margin percentage"""
-        if self.unit_cost > 0:
-            return ((self.unit_price - self.unit_cost) / self.unit_cost) * 100
-        return 0
+        """Calculate profit margin if cost and price are available"""
+        if self.unit_cost and self.unit_price:
+            if self.unit_cost > 0:
+                margin = ((self.unit_price - self.unit_cost) / self.unit_cost) * 100
+                return round(margin, 2)
+        return 0.0
 
 class ProductOption(models.Model):
     OPTION_TYPE_CHOICES = [

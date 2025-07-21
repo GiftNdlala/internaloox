@@ -23,7 +23,7 @@ if [ -n "$DATABASE_URL" ]; then
         echo "Database connection successful, running migrations..."
         # Run existing migrations only (no makemigrations to avoid interactive prompts)
         python manage.py migrate --no-input
-        echo "Setting up MVP reference data..."
+        echo "Setting up MVP reference data (compatible with existing products)..."
         python manage.py setup_mvp_data || echo "MVP data setup failed or already exists"
     else
         echo "Skipping migrations due to database connection issues"
