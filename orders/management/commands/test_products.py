@@ -35,13 +35,19 @@ class Command(BaseCommand):
                 for col in columns:
                     self.stdout.write(f'   - {col[0]}: {col[1]} (nullable: {col[2]})')
             
-            # Test 4: Try to create a simple product
+            # Test 4: Try to create a simple product with correct field names
             test_product, created = Product.objects.get_or_create(
                 name='Test Product API',
                 defaults={
                     'description': 'Test product for API debugging',
-                    'price': 'R100.00',
-                    'stock_quantity': 1
+                    'product_name': 'Test Product API',
+                    'product_type': 'Test',
+                    'default_fabric_letter': 'A',
+                    'default_color_code': '01',
+                    'unit_cost': 50.00,
+                    'unit_price': 100.00,
+                    'estimated_build_time': 7,
+                    'stock': 1
                 }
             )
             
