@@ -256,7 +256,8 @@ class ProductViewSet(viewsets.ModelViewSet):
     # Remove mock data logic - use real database data
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        # Remove created_by field since it doesn't exist in simplified Product model
+        serializer.save()
 
 # Legacy Color/Fabric ViewSets (for compatibility)
 class ColorViewSet(viewsets.ModelViewSet):
