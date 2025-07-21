@@ -1,7 +1,11 @@
 from django.db import models
 from django.core.validators import MinValueValidator
 from django.utils import timezone
+from datetime import date
 from users.models import User
+
+def get_default_delivery_date():
+    return timezone.now().date()
 
 class Customer(models.Model):
     name = models.CharField(max_length=200)
@@ -123,7 +127,7 @@ class Order(models.Model):
     
     # MVP Production Tracking
     production_status = models.CharField(max_length=20, choices=PRODUCTION_STATUS_CHOICES, default='not_started')
-    delivery_deadline = models.DateField(help_text="Target delivery date")
+    delivery_deadline = models.DateField(help_text="Target delivery date", default=get_default_delivery_date)
     order_date = models.DateTimeField(auto_now_add=True)
     expected_delivery_date = models.DateField()
     actual_delivery_date = models.DateField(null=True, blank=True)

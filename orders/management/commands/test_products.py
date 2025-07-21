@@ -21,19 +21,30 @@ class Command(BaseCommand):
                 self.stdout.write(f'   - Stock: {first_product.stock}')
                 self.stdout.write(f'   - Created: {first_product.created_at}')
             
-            # Test 3: Check database table structure
+            # Test 3: Check database table structure (database-agnostic)
             with connection.cursor() as cursor:
-                cursor.execute("""
-                    SELECT column_name, data_type, is_nullable 
-                    FROM information_schema.columns 
-                    WHERE table_name = 'orders_product'
-                    ORDER BY ordinal_position;
-                """)
-                columns = cursor.fetchall()
+                db_vendor = connection.vendor
+                self.stdout.write(f'📋 Database: {db_vendor}')
                 
-                self.stdout.write('📋 Database columns:')
-                for col in columns:
-                    self.stdout.write(f'   - {col[0]}: {col[1]} (nullable: {col[2]})')
+                if db_vendor == 'postgresql':
+                    cursor.execute("""
+                        SELECT column_name, data_type, is_nullable 
+                        FROM information_schema.columns 
+                        WHERE table_name = 'orders_product'
+                        ORDER BY ordinal_position;
+                    """)
+                    columns = cursor.fetchall()
+                    for col in columns:
+                        self.stdout.write(f'   - {col[0]}: {col[1]} (nullable: {col[2]})')
+                elif db_vendor == 'sqlite':
+                    cursor.execute("PRAGMA table_info(orders_product);")
+                    columns = cursor.fetchall()
+                    for col in columns:
+                        # SQLite PRAGMA returns: (cid, name, type, notnull, dflt_value, pk)
+                        nullable = "YES" if col[3] == 0 else "NO"
+                        self.stdout.write(f'   - {col[1]}: {col[2]} (nullable: {nullable})')
+                else:
+                    self.stdout.write(f'   - Unsupported database vendor: {db_vendor}')
             
             # Test 4: Try to create a simple product with correct field names
             test_product, created = Product.objects.get_or_create(
