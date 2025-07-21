@@ -79,6 +79,75 @@ class OrderViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Order.objects.all()
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def escalate_priority(self, request, pk=None):
+        """Escalate order to priority (owner only)"""
+        order = self.get_object()
+        user = request.user
+        
+        if order.escalate_to_priority(user):
+            order.save()
+            return Response({
+                'message': 'Order escalated to priority successfully',
+                'queue_position': order.queue_position,
+                'is_priority_order': order.is_priority_order
+            })
+        else:
+            return Response({
+                'error': 'You do not have permission to escalate this order or order is not eligible'
+            }, status=status.HTTP_403_FORBIDDEN)
+    
+    @action(detail=False, methods=['get'])
+    def queue_status(self, request):
+        """Get current production queue status"""
+        queue_orders = Order.objects.filter(
+            order_status='deposit_paid',
+            queue_position__isnull=False
+        ).order_by('queue_position')
+        
+        queue_data = []
+        for order in queue_orders:
+            queue_data.append({
+                'id': order.id,
+                'order_number': order.order_number,
+                'customer_name': order.customer.name if order.customer else order.customer_name,
+                'queue_position': order.queue_position,
+                'deposit_paid_date': order.deposit_paid_date,
+                'days_in_queue': order.days_in_queue(),
+                'estimated_completion_date': order.estimated_completion_date,
+                'is_priority_order': order.is_priority_order,
+                'is_queue_expired': order.is_queue_expired()
+            })
+        
+        return Response({
+            'total_orders_in_queue': len(queue_data),
+            'queue': queue_data
+        })
+    
+    @action(detail=True, methods=['patch'], permission_classes=[IsAuthenticated])
+    def set_delivery_date(self, request, pk=None):
+        """Set delivery date (only when order is ready)"""
+        order = self.get_object()
+        
+        if not order.can_set_delivery_date():
+            return Response({
+                'error': 'Delivery date can only be set when order status is "order_ready"'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        delivery_date = request.data.get('delivery_date')
+        if not delivery_date:
+            return Response({
+                'error': 'delivery_date is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        order.expected_delivery_date = delivery_date
+        order.save()
+        
+        return Response({
+            'message': 'Delivery date set successfully',
+            'expected_delivery_date': order.expected_delivery_date
+        })
 
     def list(self, request, *args, **kwargs):
         if not Order.objects.exists():

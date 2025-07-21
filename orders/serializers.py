@@ -188,7 +188,10 @@ class OrderListSerializer(serializers.ModelSerializer):
             'order_status', 'production_status', 'payment_status',
             'deposit_amount', 'balance_amount', 'total_amount',
             'admin_notes', 'warehouse_notes', 'delivery_notes',
-            'created_at', 'updated_at'
+            'created_at', 'updated_at',
+            # New queue management fields
+            'deposit_paid_date', 'queue_position', 'is_priority_order',
+            'production_start_date', 'estimated_completion_date'
         ]
 
 class OrderStatusUpdateSerializer(serializers.ModelSerializer):

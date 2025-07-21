@@ -1,7 +1,7 @@
 from django.db import models
 from django.core.validators import MinValueValidator
 from django.utils import timezone
-from datetime import date
+from datetime import date, timedelta
 from users.models import User
 
 def get_default_delivery_date():
@@ -84,13 +84,16 @@ class ProductOption(models.Model):
 
 class Order(models.Model):
     PAYMENT_STATUS_CHOICES = [
+        ('deposit_pending', 'Deposit Pending'),
+        ('deposit_paid', 'Deposit Paid'),
+        ('fully_paid', 'Fully Paid'),
+        ('overdue', 'Overdue'),
+        # Legacy statuses for backward compatibility
         ('pending', 'Pending'),
         ('partial', 'Partial'),
         ('paid', 'Paid'),
-        ('overdue', 'Overdue'),
-        ('deposit_only', 'Deposit Only'),  # Legacy
-        ('fifty_percent', '50% Paid'),     # Legacy
-        ('fully_paid', 'Fully Paid'),     # Legacy
+        ('deposit_only', 'Deposit Only'),
+        ('fifty_percent', '50% Paid'),
     ]
     
     # MVP Production Status Choices (Enhanced for Frontend)
@@ -106,13 +109,17 @@ class Order(models.Model):
     ]
     
     ORDER_STATUS_CHOICES = [
+        ('deposit_pending', 'Deposit Pending'),
+        ('deposit_paid', 'Deposit Paid - In Queue'),
+        ('order_ready', 'Order Ready'),
+        ('out_for_delivery', 'Out for Delivery'),
+        ('delivered', 'Delivered'),
+        ('cancelled', 'Cancelled'),
+        # Legacy statuses for backward compatibility
         ('pending', 'Pending'),
         ('confirmed', 'Confirmed'),
         ('in_production', 'In Production'),
         ('ready_for_delivery', 'Ready for Delivery'),
-        ('out_for_delivery', 'Out for Delivery'),
-        ('delivered', 'Delivered'),
-        ('cancelled', 'Cancelled'),
     ]
     order_number = models.CharField(max_length=20, unique=True)
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='orders', blank=True, null=True)
@@ -129,8 +136,15 @@ class Order(models.Model):
     production_status = models.CharField(max_length=20, choices=PRODUCTION_STATUS_CHOICES, default='not_started')
     delivery_deadline = models.DateField(help_text="Target delivery date", default=get_default_delivery_date)
     order_date = models.DateTimeField(auto_now_add=True)
-    expected_delivery_date = models.DateField()
+    expected_delivery_date = models.DateField(null=True, blank=True, help_text="Set only when order is ready")
     actual_delivery_date = models.DateField(null=True, blank=True)
+    
+    # New fields for queue management
+    deposit_paid_date = models.DateTimeField(null=True, blank=True, help_text="When deposit was paid - starts queue timer")
+    queue_position = models.IntegerField(null=True, blank=True, help_text="Position in production queue")
+    is_priority_order = models.BooleanField(default=False, help_text="Owner-escalated priority order")
+    production_start_date = models.DateField(null=True, blank=True, help_text="When production actually started")
+    estimated_completion_date = models.DateField(null=True, blank=True, help_text="Auto-calculated based on queue")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_orders')
     assigned_to_warehouse = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='warehouse_orders')
     assigned_to_delivery = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='delivery_orders')
@@ -152,7 +166,80 @@ class Order(models.Model):
                 self.order_number = f"OOX{last_number + 1:06d}"
             else:
                 self.order_number = "OOX000001"
+        
+        # Handle status change logic
+        self._handle_status_changes()
+        
         super().save(*args, **kwargs)
+    
+    def _handle_status_changes(self):
+        """Handle automatic actions when status changes"""
+        if self.order_status == 'deposit_paid' and not self.deposit_paid_date:
+            # Automatically set deposit paid date and add to queue
+            self.deposit_paid_date = timezone.now()
+            self._add_to_queue()
+        
+        if self.order_status == 'order_ready' and not self.expected_delivery_date:
+            # If order is ready but no delivery date set, calculate default
+            if self.deposit_paid_date:
+                # Give 3 days for delivery from ready status
+                self.expected_delivery_date = (timezone.now() + timedelta(days=3)).date()
+    
+    def _add_to_queue(self):
+        """Add order to production queue"""
+        if not self.queue_position:
+            # Get the highest queue position and add 1
+            highest_position = Order.objects.filter(
+                order_status='deposit_paid',
+                queue_position__isnull=False
+            ).aggregate(max_position=models.Max('queue_position'))['max_position']
+            
+            self.queue_position = (highest_position or 0) + 1
+            
+            # Calculate estimated completion date (20 business days from deposit paid)
+            if self.deposit_paid_date:
+                business_days = 20
+                current_date = self.deposit_paid_date.date()
+                while business_days > 0:
+                    current_date += timedelta(days=1)
+                    if current_date.weekday() < 5:  # Monday to Friday
+                        business_days -= 1
+                self.estimated_completion_date = current_date
+    
+    def can_set_delivery_date(self):
+        """Check if delivery date can be set"""
+        return self.order_status == 'order_ready'
+    
+    def is_in_queue(self):
+        """Check if order is in production queue"""
+        return self.order_status == 'deposit_paid' and self.queue_position is not None
+    
+    def days_in_queue(self):
+        """Calculate days spent in queue"""
+        if self.deposit_paid_date:
+            return (timezone.now().date() - self.deposit_paid_date.date()).days
+        return 0
+    
+    def is_queue_expired(self):
+        """Check if order has exceeded 20-day queue limit"""
+        return self.days_in_queue() > 20
+    
+    def can_escalate_priority(self, user):
+        """Check if user can escalate this order to priority"""
+        return user.role == 'owner' and self.order_status in ['deposit_paid', 'order_ready']
+    
+    def escalate_to_priority(self, user):
+        """Escalate order to priority (owner only)"""
+        if self.can_escalate_priority(user):
+            self.is_priority_order = True
+            self.queue_position = 1  # Move to front of queue
+            # Move other orders down
+            Order.objects.filter(
+                order_status='deposit_paid',
+                queue_position__gte=1
+            ).exclude(id=self.id).update(queue_position=models.F('queue_position') + 1)
+            return True
+        return False
 
 # MVP Reference Tables for Physical Boards
 class ColorReference(models.Model):
