@@ -249,9 +249,9 @@ class ProductViewSet(viewsets.ModelViewSet):
     serializer_class = ProductSerializer
     permission_classes = [AllowAny]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['name', 'description']
-    ordering_fields = ['price', 'created_at']
-    ordering = ['-created_at']
+    search_fields = ['product_name', 'description']
+    ordering_fields = ['unit_price', 'date_added']
+    ordering = ['-date_added']
 
     def list(self, request, *args, **kwargs):
         if not Product.objects.exists():
