@@ -25,6 +25,8 @@ if [ -n "$DATABASE_URL" ]; then
         python manage.py migrate --no-input
         echo "Setting up MVP reference data (compatible with existing products)..."
         python manage.py setup_mvp_data || echo "MVP data setup failed or already exists"
+        echo "Testing Product model for API debugging..."
+        python manage.py test_products || echo "Product test failed"
     else
         echo "Skipping migrations due to database connection issues"
     fi

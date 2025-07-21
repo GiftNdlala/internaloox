@@ -250,7 +250,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     permission_classes = [AllowAny]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'description']
-    ordering_fields = ['price', 'created_at']
+    ordering_fields = ['created_at', 'updated_at']  # Remove price since it's CharField
     ordering = ['-created_at']
 
     # Remove mock data logic - use real database data
@@ -258,6 +258,19 @@ class ProductViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         # Remove created_by field since it doesn't exist in simplified Product model
         serializer.save()
+    
+    def list(self, request, *args, **kwargs):
+        """Override list to add error handling"""
+        try:
+            return super().list(request, *args, **kwargs)
+        except Exception as e:
+            from rest_framework.response import Response
+            from rest_framework import status
+            return Response({
+                'error': str(e),
+                'message': 'Error fetching products',
+                'results': []
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 # Legacy Color/Fabric ViewSets (for compatibility)
 class ColorViewSet(viewsets.ModelViewSet):
