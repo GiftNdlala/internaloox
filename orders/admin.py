@@ -31,19 +31,23 @@ class FabricReferenceAdmin(admin.ModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ['name', 'display_price', 'stock_quantity', 'created_at']
+    list_display = ['id', 'name', 'display_price', 'display_stock']
     search_fields = ['name', 'description']
-    ordering = ['-created_at']
+    ordering = ['id']
 
     fieldsets = (
         ('Product Information', {
-            'fields': ('name', 'description', 'stock_quantity')
+            'fields': ('name', 'description')
         }),
     )
     
     def display_price(self, obj):
         return obj.display_price
     display_price.short_description = 'Price'
+    
+    def display_stock(self, obj):
+        return obj.stock_quantity
+    display_stock.short_description = 'Stock'
 
 class OrderItemInline(admin.TabularInline):
     model = OrderItem

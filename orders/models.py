@@ -18,18 +18,15 @@ class Customer(models.Model):
         return f"{self.name} ({self.phone})"
 
 class Product(models.Model):
-    # Match EXACT Supabase orders_product table structure
+    # MINIMAL model - only fields that definitely exist in Supabase
     id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=200, default='Unnamed Product')
     description = models.TextField(blank=True, null=True)
-    # Remove price field - it doesn't exist in Supabase table
-    stock_quantity = models.PositiveIntegerField(default=0)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    # Remove ALL other fields until we confirm what actually exists
     
     class Meta:
         db_table = 'orders_product'  # Ensure it uses the correct table name
-        ordering = ['-created_at']
+        ordering = ['id']  # Use id since created_at might not exist
         
     def __str__(self):
         return f"{self.name}"
@@ -43,6 +40,11 @@ class Product(models.Model):
     def display_price(self):
         """Return default price since price field doesn't exist in DB"""
         return "R0.00"
+        
+    @property
+    def stock_quantity(self):
+        """Return default stock since field doesn't exist in DB"""
+        return 0
 
 class ProductOption(models.Model):
     OPTION_TYPE_CHOICES = [

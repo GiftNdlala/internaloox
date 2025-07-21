@@ -250,8 +250,8 @@ class ProductViewSet(viewsets.ModelViewSet):
     permission_classes = [AllowAny]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'description']
-    ordering_fields = ['created_at', 'updated_at']  # Remove price since it's CharField
-    ordering = ['-created_at']
+    ordering_fields = ['id', 'name']  # Only use fields that exist
+    ordering = ['id']
 
     # Remove mock data logic - use real database data
 

@@ -287,8 +287,7 @@ class Command(BaseCommand):
                 lookup_data = {
                     'name': product_data.get('product_name', product_data.get('name', 'Unknown Product')),
                     'description': product_data.get('description', ''),
-                    # Remove price field - it doesn't exist in Supabase table
-                    'stock_quantity': 10  # Default stock
+                    # Only use fields that exist in Supabase table
                 }
                 product, created = Product.objects.get_or_create(
                     name=lookup_data['name'],
