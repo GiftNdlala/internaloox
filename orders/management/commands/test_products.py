@@ -17,8 +17,8 @@ class Command(BaseCommand):
             if product_count > 0:
                 first_product = Product.objects.first()
                 self.stdout.write(f'✅ First product: {first_product.name}')
-                self.stdout.write(f'   - Price: {first_product.price}')
-                self.stdout.write(f'   - Stock: {first_product.stock_quantity}')
+                self.stdout.write(f'   - Price: {first_product.display_price}')
+                self.stdout.write(f'   - Stock: {first_product.stock}')
                 self.stdout.write(f'   - Created: {first_product.created_at}')
             
             # Test 3: Check database table structure
