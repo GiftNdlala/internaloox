@@ -18,33 +18,54 @@ class Customer(models.Model):
         return f"{self.name} ({self.phone})"
 
 class Product(models.Model):
-    # MINIMAL model - only fields that definitely exist in Supabase
-    id = models.AutoField(primary_key=True)
-    name = models.CharField(max_length=200, default='Unnamed Product')
+    # Match EXACT Supabase orders_product table structure
+    id = models.BigAutoField(primary_key=True)
+    name = models.CharField(max_length=200, blank=True, null=True)
     description = models.TextField(blank=True, null=True)
-    # Remove ALL other fields until we confirm what actually exists
+    stock = models.IntegerField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    available_for_order = models.BooleanField(default=True)
+    base_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    category = models.CharField(max_length=200, blank=True, null=True)
+    default_quantity_unit = models.CharField(max_length=50, blank=True, null=True)
+    model_code = models.CharField(max_length=100, blank=True, null=True, unique=True)
+    product_type = models.CharField(max_length=100)
+    production_time_days = models.IntegerField(blank=True, null=True)
+    product_name = models.CharField(max_length=200)
+    default_fabric_letter = models.CharField(max_length=1)
+    default_color_code = models.CharField(max_length=10)
+    unit_cost = models.DecimalField(max_digits=10, decimal_places=2)
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    estimated_build_time = models.IntegerField()
+    is_active = models.BooleanField(default=True)
+    date_added = models.DateTimeField(blank=True, null=True)
     
     class Meta:
-        db_table = 'orders_product'  # Ensure it uses the correct table name
-        ordering = ['id']  # Use id since created_at might not exist
+        db_table = 'orders_product'
+        ordering = ['-created_at']
         
     def __str__(self):
-        return f"{self.name}"
+        return f"{self.product_name or self.name or 'Unnamed Product'}"
     
     @property
     def display_name(self):
-        """Return the product name"""
-        return self.name
+        """Return the best available name"""
+        return self.product_name or self.name or 'Unnamed Product'
     
     @property
     def display_price(self):
-        """Return default price since price field doesn't exist in DB"""
+        """Return unit_price or base_price"""
+        if self.unit_price:
+            return f"R{self.unit_price:.2f}"
+        elif self.base_price:
+            return f"R{self.base_price:.2f}"
         return "R0.00"
         
     @property
     def stock_quantity(self):
-        """Return default stock since field doesn't exist in DB"""
-        return 0
+        """Return stock field"""
+        return self.stock or 0
 
 class ProductOption(models.Model):
     OPTION_TYPE_CHOICES = [

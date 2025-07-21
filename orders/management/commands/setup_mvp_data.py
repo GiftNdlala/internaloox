@@ -285,12 +285,21 @@ class Command(BaseCommand):
             for product_data in furniture_products:
                 # Convert product_name to name for compatibility
                 lookup_data = {
+                    'product_name': product_data.get('product_name', product_data.get('name', 'Unknown Product')),
                     'name': product_data.get('product_name', product_data.get('name', 'Unknown Product')),
                     'description': product_data.get('description', ''),
-                    # Only use fields that exist in Supabase table
+                    'unit_price': product_data.get('unit_price', 1000.00),
+                    'unit_cost': product_data.get('unit_cost', 500.00),
+                    'product_type': product_data.get('product_type', 'furniture'),
+                    'default_fabric_letter': product_data.get('default_fabric_letter', 'A'),
+                    'default_color_code': product_data.get('default_color_code', '01'),
+                    'estimated_build_time': product_data.get('estimated_build_time', 7),
+                    'is_active': True,
+                    'available_for_order': True,
+                    'stock': 10
                 }
                 product, created = Product.objects.get_or_create(
-                    name=lookup_data['name'],
+                    product_name=lookup_data['product_name'],
                     defaults=lookup_data
                 )
                 if created:

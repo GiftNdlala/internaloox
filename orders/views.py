@@ -249,9 +249,9 @@ class ProductViewSet(viewsets.ModelViewSet):
     serializer_class = ProductSerializer
     permission_classes = [AllowAny]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['name', 'description']
-    ordering_fields = ['id', 'name']  # Only use fields that exist
-    ordering = ['id']
+    search_fields = ['product_name', 'name', 'description', 'model_code']
+    ordering_fields = ['created_at', 'product_name', 'unit_price', 'stock']
+    ordering = ['-created_at']
 
     # Remove mock data logic - use real database data
 

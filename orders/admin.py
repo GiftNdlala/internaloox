@@ -31,23 +31,35 @@ class FabricReferenceAdmin(admin.ModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ['id', 'name', 'display_price', 'display_stock']
-    search_fields = ['name', 'description']
-    ordering = ['id']
+    list_display = ['product_name', 'display_price', 'stock', 'is_active', 'created_at']
+    search_fields = ['product_name', 'name', 'description', 'model_code']
+    list_filter = ['is_active', 'available_for_order', 'product_type', 'category']
+    ordering = ['-created_at']
 
     fieldsets = (
-        ('Product Information', {
-            'fields': ('name', 'description')
+        ('Basic Information', {
+            'fields': ('product_name', 'name', 'description', 'model_code')
+        }),
+        ('Pricing', {
+            'fields': ('unit_price', 'unit_cost', 'base_price')
+        }),
+        ('Inventory', {
+            'fields': ('stock', 'available_for_order', 'default_quantity_unit')
+        }),
+        ('Production', {
+            'fields': ('production_time_days', 'estimated_build_time', 'product_type')
+        }),
+        ('Defaults', {
+            'fields': ('default_fabric_letter', 'default_color_code', 'category')
+        }),
+        ('Status', {
+            'fields': ('is_active', 'date_added')
         }),
     )
     
     def display_price(self, obj):
         return obj.display_price
     display_price.short_description = 'Price'
-    
-    def display_stock(self, obj):
-        return obj.stock_quantity
-    display_stock.short_description = 'Stock'
 
 class OrderItemInline(admin.TabularInline):
     model = OrderItem
