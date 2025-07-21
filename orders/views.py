@@ -253,31 +253,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     ordering_fields = ['price', 'unit_price', 'created_at']
     ordering = ['-created_at']
 
-    def list(self, request, *args, **kwargs):
-        if not Product.objects.exists():
-            # Return mock data for frontend testing
-            mock_data = [
-                {
-                    'id': 1,
-                    'name': 'Custom Sofa',
-                    'description': 'Blue, 3-seater',
-                    'price': 'R50000.00',
-                    'stock_quantity': 10,
-                    'created_at': '2024-07-01T10:00:00Z',
-                    'updated_at': '2024-07-01T10:00:00Z',
-                },
-                {
-                    'id': 2,
-                    'name': 'Office Chair',
-                    'description': 'Ergonomic, adjustable height',
-                    'price': 'R25000.00',
-                    'stock_quantity': 20,
-                    'created_at': '2024-07-02T11:00:00Z',
-                    'updated_at': '2024-07-02T11:00:00Z',
-                }
-            ]
-            return Response(mock_data)
-        return super().list(request, *args, **kwargs)
+    # Remove mock data logic - use real database data
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)

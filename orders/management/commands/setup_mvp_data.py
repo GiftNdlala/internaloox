@@ -283,14 +283,21 @@ class Command(BaseCommand):
             ]
             
             for product_data in furniture_products:
+                # Convert product_name to name for compatibility
+                lookup_data = {
+                    'name': product_data.get('product_name', product_data.get('name', 'Unknown Product')),
+                    'description': product_data.get('description', ''),
+                    'price': f"R{product_data.get('unit_price', 0):.2f}",
+                    'stock_quantity': 10  # Default stock
+                }
                 product, created = Product.objects.get_or_create(
-                    product_name=product_data['product_name'],
-                    defaults=product_data
+                    name=lookup_data['name'],
+                    defaults=lookup_data
                 )
                 if created:
-                    self.stdout.write(f'  ✓ Created product: {product_data["product_name"]}')
+                    self.stdout.write(f'  ✓ Created product: {lookup_data["name"]}')
                 else:
-                    self.stdout.write(f'  - Product exists: {product_data["product_name"]}')
+                    self.stdout.write(f'  - Product exists: {lookup_data["name"]}')
         
         self.stdout.write(
             self.style.SUCCESS(
