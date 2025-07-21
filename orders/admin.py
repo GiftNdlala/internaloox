@@ -31,39 +31,15 @@ class FabricReferenceAdmin(admin.ModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = [
-        'product_name', 'product_type', 'product_category', 
-        'default_fabric_letter', 'default_color_code',
-        'unit_cost', 'unit_price', 'profit_margin_display', 
-        'estimated_build_time', 'is_active'
-    ]
-    list_filter = ['product_type', 'product_category', 'is_active']
-    search_fields = ['product_name', 'model_code']
-    ordering = ['product_name']
+    list_display = ['name', 'price', 'stock_quantity', 'created_at']
+    search_fields = ['name', 'description']
+    ordering = ['-created_at']
     
     fieldsets = (
         ('Product Information', {
-            'fields': ('product_name', 'product_type', 'product_category', 'description')
+            'fields': ('name', 'description', 'price', 'stock_quantity')
         }),
-        ('Default Settings', {
-            'fields': ('default_fabric_letter', 'default_color_code')
-        }),
-        ('Pricing & Production', {
-            'fields': ('unit_cost', 'unit_price', 'estimated_build_time')
-        }),
-        ('Status', {
-            'fields': ('is_active', 'model_code')
-        })
     )
-    
-    def profit_margin_display(self, obj):
-        margin = obj.profit_margin
-        color = 'green' if margin > 50 else 'orange' if margin > 20 else 'red'
-        return format_html(
-            '<span style="color: {};">{:.1f}%</span>',
-            color, margin
-        )
-    profit_margin_display.short_description = "Profit Margin"
 
 class OrderItemInline(admin.TabularInline):
     model = OrderItem

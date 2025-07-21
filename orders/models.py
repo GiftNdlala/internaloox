@@ -18,72 +18,29 @@ class Customer(models.Model):
         return f"{self.name} ({self.phone})"
 
 class Product(models.Model):
-    PRODUCT_TYPE_CHOICES = [
-        ('set', 'Set'),
-        ('single', 'Single Item'),
-    ]
-    
-    PRODUCT_CATEGORY_CHOICES = [
-        ('couch', 'Couch'),
-        ('mattress', 'Mattress'),
-        ('base', 'Base'),
-        ('coffee_table', 'Coffee Table'),
-        ('tv_stand', 'TV Stand'),
-        ('accessory', 'Accessory'),
-        ('other', 'Other'),
-    ]
-    
-    # Core fields (compatible with existing database)
-    name = models.CharField(max_length=200, default='Unnamed Product')  # Fallback for existing data
+    # Core fields that definitely exist in Supabase
+    name = models.CharField(max_length=200, default='Unnamed Product')
     description = models.TextField(blank=True, null=True)
-    price = models.CharField(max_length=50, default='R0.00')  # String format for compatibility
+    price = models.CharField(max_length=50, default='R0.00')
     stock_quantity = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
-    # MVP Optional Fields (for new functionality)
-    product_name = models.CharField(max_length=200, blank=True, null=True)
-    product_type = models.CharField(max_length=32, choices=PRODUCT_TYPE_CHOICES, blank=True, null=True)
-    product_category = models.CharField(max_length=100, choices=PRODUCT_CATEGORY_CHOICES, blank=True, null=True)
-    default_fabric_letter = models.CharField(max_length=1, blank=True, null=True, help_text="Default fabric code (A-Z)")
-    default_color_code = models.CharField(max_length=2, blank=True, null=True, help_text="Default color code (1-99)")
-    unit_cost = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True, help_text="Cost to produce")
-    unit_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True, help_text="Selling price")
-    estimated_build_time = models.PositiveIntegerField(blank=True, null=True, help_text="Days to build")
-    is_active = models.BooleanField(default=True)
-    date_added = models.DateTimeField(blank=True, null=True)
-    
-    # Additional fields for existing compatibility
-    model_code = models.CharField(max_length=32, unique=True, blank=True, null=True)
     
     class Meta:
         ordering = ['-created_at']
         
     def __str__(self):
-        # Use product_name if available, otherwise fall back to name
-        display_name = self.product_name or self.name
-        return f"{display_name}"
+        return f"{self.name}"
     
     @property
     def display_name(self):
-        """Return the best available name for this product"""
-        return self.product_name or self.name
+        """Return the product name"""
+        return self.name
     
     @property
     def display_price(self):
-        """Return the best available price for this product"""
-        if self.unit_price:
-            return f"R{self.unit_price:.2f}"
+        """Return the product price"""
         return self.price or "R0.00"
-    
-    @property
-    def profit_margin(self):
-        """Calculate profit margin if cost and price are available"""
-        if self.unit_cost and self.unit_price:
-            if self.unit_cost > 0:
-                margin = ((self.unit_price - self.unit_cost) / self.unit_cost) * 100
-                return round(margin, 2)
-        return 0.0
 
 class ProductOption(models.Model):
     OPTION_TYPE_CHOICES = [
