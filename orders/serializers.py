@@ -187,7 +187,7 @@ class OrderListSerializer(serializers.ModelSerializer):
             'order_date', 'expected_delivery_date', 'delivery_deadline',
             'order_status', 'production_status', 'payment_status',
             'deposit_amount', 'balance_amount', 'total_amount',
-            'notes', 'admin_notes', 'warehouse_notes', 'delivery_notes',
+            'admin_notes', 'warehouse_notes', 'delivery_notes',
             'created_at', 'updated_at'
         ]
 

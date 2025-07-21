@@ -199,8 +199,8 @@ class OrderItem(models.Model):
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     
     # MVP Fabric and Color using codes
-    assigned_fabric_letter = models.CharField(max_length=1, help_text="Fabric code from reference board")
-    assigned_color_code = models.CharField(max_length=2, help_text="Color code from reference board")
+    assigned_fabric_letter = models.CharField(max_length=1, help_text="Fabric code from reference board", blank=True, default="")
+    assigned_color_code = models.CharField(max_length=2, help_text="Color code from reference board", blank=True, default="")
     
     # Legacy fields for compatibility
     color = models.ForeignKey(Color, on_delete=models.SET_NULL, null=True, blank=True)
@@ -212,7 +212,9 @@ class OrderItem(models.Model):
         verbose_name_plural = "Order Items"
     
     def __str__(self):
-        return f"{self.product.product_name} x{self.quantity} (Fabric: {self.assigned_fabric_letter}, Color: {self.assigned_color_code})"
+        fabric = self.assigned_fabric_letter or "N/A"
+        color = self.assigned_color_code or "N/A"
+        return f"{self.product.product_name} x{self.quantity} (Fabric: {fabric}, Color: {color})"
     
     @property
     def total_price(self):
@@ -221,6 +223,8 @@ class OrderItem(models.Model):
     @property  
     def fabric_name(self):
         """Get fabric name from reference"""
+        if not self.assigned_fabric_letter:
+            return "No fabric assigned"
         try:
             fabric_ref = FabricReference.objects.get(fabric_letter=self.assigned_fabric_letter)
             return fabric_ref.fabric_name
@@ -230,6 +234,8 @@ class OrderItem(models.Model):
     @property
     def color_name(self):
         """Get color name from reference"""
+        if not self.assigned_color_code:
+            return "No color assigned"
         try:
             color_ref = ColorReference.objects.get(color_code=self.assigned_color_code)
             return color_ref.color_name
