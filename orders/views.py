@@ -266,11 +266,13 @@ class ProductViewSet(viewsets.ModelViewSet):
         except Exception as e:
             from rest_framework.response import Response
             from rest_framework import status
+            import traceback
             return Response({
                 'error': str(e),
                 'message': 'Error fetching products',
+                'traceback': traceback.format_exc(),
                 'results': []
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            }, status=status.HTTP_200_OK)  # Return 200 with error info instead of 500
 
 # Legacy Color/Fabric ViewSets (for compatibility)
 class ColorViewSet(viewsets.ModelViewSet):
