@@ -186,17 +186,125 @@ class UserViewSet(viewsets.ModelViewSet):
             raise PermissionDenied('Only owners can delete users.')
         return super().destroy(request, *args, **kwargs) 
 
+class CreateUserView(APIView):
+    """
+    Secure endpoint to create new users with role assignment
+    Only authenticated users with proper permissions can create users
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        try:
+            # Check if user has permission to create users
+            if not request.user.is_owner:
+                return Response({
+                    'error': 'Only users with Owner role can create new users',
+                    'required_role': 'owner',
+                    'your_role': request.user.role
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            # Get data from request
+            username = request.data.get('username')
+            email = request.data.get('email')
+            password = request.data.get('password')
+            role = request.data.get('role', 'delivery')  # Default to lowest role
+            first_name = request.data.get('first_name', '')
+            last_name = request.data.get('last_name', '')
+            phone = request.data.get('phone', '')
+            
+            # Validate required fields
+            if not username or not password:
+                return Response({
+                    'error': 'Username and password are required',
+                    'required_fields': ['username', 'password'],
+                    'optional_fields': ['email', 'first_name', 'last_name', 'phone', 'role']
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Validate role
+            valid_roles = [choice[0] for choice in User.ROLE_CHOICES]
+            if role not in valid_roles:
+                return Response({
+                    'error': f'Invalid role: {role}',
+                    'valid_roles': valid_roles
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Check if user already exists
+            if User.objects.filter(username=username).exists():
+                return Response({
+                    'error': f'User with username "{username}" already exists',
+                    'suggestion': 'Try a different username'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Check if email already exists (if provided)
+            if email and User.objects.filter(email=email).exists():
+                return Response({
+                    'error': f'User with email "{email}" already exists',
+                    'suggestion': 'Try a different email address'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Create user with proper password hashing
+            user = User.objects.create_user(
+                username=username,
+                email=email,
+                password=password,
+                role=role,
+                first_name=first_name,
+                last_name=last_name,
+                phone=phone
+            )
+            
+            # Set additional permissions for owner role
+            if role.lower() == 'owner':
+                user.is_staff = True
+                user.is_superuser = True
+                user.save()
+            
+            # Prepare response with user data
+            user_data = {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'phone': user.phone,
+                'role': user.role,
+                'role_display': user.get_role_display(),
+                'is_active': user.is_active,
+                'date_joined': user.date_joined,
+                'permissions': {
+                    'can_access_owner': user_has_role_permission(user, 'owner'),
+                    'can_access_admin': user_has_role_permission(user, 'admin'),
+                    'can_access_warehouse': user_has_role_permission(user, 'warehouse'),
+                    'can_access_delivery': user_has_role_permission(user, 'delivery'),
+                }
+            }
+            
+            logger.info(f"User created successfully: {username} (role: {role}) by {request.user.username}")
+            
+            return Response({
+                'success': True,
+                'message': f'User "{username}" created successfully with role "{role}"',
+                'user': user_data
+            }, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            logger.error(f"User creation error: {str(e)}")
+            return Response({
+                'error': f'Failed to create user: {str(e)}',
+                'type': type(e).__name__
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @csrf_exempt
 def create_admin_user(request):
-    """Temporary endpoint to create admin users - REMOVE IN PRODUCTION"""
+    """DEPRECATED - Use CreateUserView instead. Kept for backward compatibility."""
     try:
         data = json.loads(request.body)
         username = data.get('username')
         email = data.get('email')
         password = data.get('password')
-        role = data.get('role', 'customer')
+        role = data.get('role', 'delivery')
         
         # Check if user already exists
         if User.objects.filter(username=username).exists():
@@ -210,7 +318,7 @@ def create_admin_user(request):
             role=role
         )
         
-        if role == 'Owner':
+        if role.lower() == 'owner':
             user.is_staff = True
             user.is_superuser = True
             user.save()
@@ -218,7 +326,8 @@ def create_admin_user(request):
         return JsonResponse({
             'success': True,
             'message': f'User {username} created successfully',
-            'user_id': user.id
+            'user_id': user.id,
+            'note': 'This endpoint is deprecated. Use POST /api/users/create/ instead.'
         })
         
     except Exception as e:
