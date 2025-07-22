@@ -163,28 +163,118 @@ class UserPermissionsView(APIView):
 
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
-    serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]
     
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return UserListSerializer
+        return UserSerializer
+    
     def get_queryset(self):
-        if self.request.user.is_admin or self.request.user.is_owner:
-            return User.objects.all()
-        return User.objects.filter(role=self.request.user.role)
+        # Order by date_joined for consistent pagination
+        queryset = User.objects.all().order_by('-date_joined')
+        
+        # Filter based on user role permissions
+        if self.request.user.is_owner:
+            return queryset  # Owners can see all users
+        elif self.request.user.is_admin:
+            return queryset.exclude(role='owner')  # Admins can see all except owners
+        else:
+            return queryset.filter(id=self.request.user.id)  # Others can only see themselves
 
     def create(self, request, *args, **kwargs):
         if not request.user.is_owner:
-            raise PermissionDenied('Only owners can create users.')
-        return super().create(request, *args, **kwargs)
+            return Response({
+                'error': 'Only users with Owner role can create new users',
+                'required_role': 'owner',
+                'your_role': request.user.role
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        
+        # Return detailed response
+        response_serializer = UserSerializer(user)
+        return Response({
+            'success': True,
+            'message': f'User "{user.username}" created successfully',
+            'user': response_serializer.data
+        }, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
         if not request.user.is_owner:
-            raise PermissionDenied('Only owners can update users.')
-        return super().update(request, *args, **kwargs)
+            return Response({
+                'error': 'Only users with Owner role can update users',
+                'required_role': 'owner',
+                'your_role': request.user.role
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        
+        return Response({
+            'success': True,
+            'message': f'User "{user.username}" updated successfully',
+            'user': serializer.data
+        })
 
     def destroy(self, request, *args, **kwargs):
         if not request.user.is_owner:
-            raise PermissionDenied('Only owners can delete users.')
-        return super().destroy(request, *args, **kwargs) 
+            return Response({
+                'error': 'Only users with Owner role can delete users',
+                'required_role': 'owner',
+                'your_role': request.user.role
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        instance = self.get_object()
+        
+        # Prevent deleting yourself
+        if instance.id == request.user.id:
+            return Response({
+                'error': 'You cannot delete your own account',
+                'suggestion': 'Ask another owner to delete your account if needed'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        username = instance.username
+        instance.delete()
+        
+        return Response({
+            'success': True,
+            'message': f'User "{username}" deleted successfully'
+        }, status=status.HTTP_204_NO_CONTENT)
+    
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        return Response({
+            'success': True,
+            'user': serializer.data
+        })
+    
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response({
+                'success': True,
+                'users': serializer.data,
+                'total_users': queryset.count(),
+                'user_role': request.user.role
+            })
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'success': True,
+            'users': serializer.data,
+            'total_users': queryset.count(),
+            'user_role': request.user.role
+        }) 
 
 class CreateUserView(APIView):
     """
