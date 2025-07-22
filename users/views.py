@@ -7,7 +7,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from .models import User
-from .serializers import UserSerializer
+from .serializers import UserSerializer, UserListSerializer
 from rest_framework.exceptions import PermissionDenied
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
@@ -261,12 +261,14 @@ class UserViewSet(viewsets.ModelViewSet):
         
         if page is not None:
             serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response({
+            paginated_response = self.get_paginated_response(serializer.data)
+            # Enhance the paginated response with additional info
+            paginated_response.data.update({
                 'success': True,
-                'users': serializer.data,
                 'total_users': queryset.count(),
                 'user_role': request.user.role
             })
+            return paginated_response
         
         serializer = self.get_serializer(queryset, many=True)
         return Response({
