@@ -19,6 +19,7 @@ import json
 def user_has_role_permission(user, requested_role):
     """
     Check if user has permission to access the requested role dashboard
+    ONLY OWNER can login to any dashboard - all other users are restricted
     """
     if not user or not requested_role:
         return False
@@ -26,20 +27,12 @@ def user_has_role_permission(user, requested_role):
     user_role = user.role.lower()
     requested_role = requested_role.lower()
     
-    # Owner can access everything
+    # ONLY OWNER can access any dashboard
     if user_role == 'owner':
         return True
     
-    # Users can only access their own role or lower in hierarchy
-    role_hierarchy = ['delivery', 'warehouse', 'admin', 'owner']
-    
-    try:
-        user_level = role_hierarchy.index(user_role)
-        requested_level = role_hierarchy.index(requested_role)
-        return user_level >= requested_level
-    except ValueError:
-        # Invalid role
-        return False
+    # All other users are denied access to any dashboard
+    return False
 
 @method_decorator(csrf_exempt, name='dispatch')
 class LoginView(APIView):
@@ -130,17 +123,17 @@ class CurrentUserView(APIView):
         return Response(serializer.data)
 
 class UserPermissionsView(APIView):
-    """Get user's role permissions and accessible dashboards"""
+    """Get user's role permissions and accessible dashboards - ONLY OWNER can access any dashboard"""
     permission_classes = [IsAuthenticated]
     
     def get(self, request):
         user = request.user
         available_roles = []
         
-        # Check which roles the user can access
-        roles_to_check = ['delivery', 'warehouse', 'admin', 'owner']
-        for role in roles_to_check:
-            if user_has_role_permission(user, role):
+        # Only owners can access any dashboard
+        if user.role.lower() == 'owner':
+            roles_to_check = ['delivery', 'warehouse', 'admin', 'owner']
+            for role in roles_to_check:
                 available_roles.append({
                     'value': role,
                     'label': role.title(),
@@ -151,11 +144,13 @@ class UserPermissionsView(APIView):
             'user_role': user.role,
             'available_roles': available_roles,
             'permissions': {
-                'can_access_owner': user_has_role_permission(user, 'owner'),
-                'can_access_admin': user_has_role_permission(user, 'admin'),
-                'can_access_warehouse': user_has_role_permission(user, 'warehouse'),
-                'can_access_delivery': user_has_role_permission(user, 'delivery'),
-            }
+                'can_access_owner': user.role.lower() == 'owner',
+                'can_access_admin': user.role.lower() == 'owner',
+                'can_access_warehouse': user.role.lower() == 'owner',
+                'can_access_delivery': user.role.lower() == 'owner',
+            },
+            'is_owner_only': True,
+            'message': 'Only users with Owner role can access dashboards'
         })
 
 class UserViewSet(viewsets.ModelViewSet):
