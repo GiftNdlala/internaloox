@@ -13,5 +13,6 @@ urlpatterns = [
     path('login/', views.LoginView.as_view(), name='login'),
     path('logout/', views.LogoutView.as_view(), name='logout'),
     path('current-user/', views.CurrentUserView.as_view(), name='current_user'),
+    path('permissions/', views.UserPermissionsView.as_view(), name='user_permissions'),
     path('create-admin/', views.create_admin_user, name='create_admin_user'),  # TEMPORARY
 ] 

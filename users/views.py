@@ -16,6 +16,31 @@ logger = logging.getLogger(__name__)
 from rest_framework_simplejwt.tokens import RefreshToken
 import json
 
+def user_has_role_permission(user, requested_role):
+    """
+    Check if user has permission to access the requested role dashboard
+    """
+    if not user or not requested_role:
+        return False
+        
+    user_role = user.role.lower()
+    requested_role = requested_role.lower()
+    
+    # Owner can access everything
+    if user_role == 'owner':
+        return True
+    
+    # Users can only access their own role or lower in hierarchy
+    role_hierarchy = ['delivery', 'warehouse', 'admin', 'owner']
+    
+    try:
+        user_level = role_hierarchy.index(user_role)
+        requested_level = role_hierarchy.index(requested_role)
+        return user_level >= requested_level
+    except ValueError:
+        # Invalid role
+        return False
+
 @method_decorator(csrf_exempt, name='dispatch')
 class LoginView(APIView):
     authentication_classes = []  # Disable SessionAuthentication (and thus CSRF) for this endpoint
@@ -25,6 +50,7 @@ class LoginView(APIView):
         try:
             username = request.data.get('username')
             password = request.data.get('password')
+            selected_role = request.data.get('role')  # NEW: Role selection from frontend
             
             if not username or not password:
                 logger.warning("Missing username or password")
@@ -32,6 +58,7 @@ class LoginView(APIView):
                     'error': 'Username and password are required'
                 }, status=status.HTTP_400_BAD_REQUEST)
             
+            # Authenticate user credentials
             user = authenticate(username=username, password=password)
             
             if user is None:
@@ -46,15 +73,44 @@ class LoginView(APIView):
                     'error': 'Account is disabled'
                 }, status=status.HTTP_401_UNAUTHORIZED)
             
+            # NEW: Validate role permission if role is specified
+            if selected_role:
+                if not user_has_role_permission(user, selected_role):
+                    logger.warning(f"User {username} (role: {user.role}) attempted to access {selected_role} dashboard without permission")
+                    return Response({
+                        'error': f'Access denied: You do not have {selected_role} permissions',
+                        'user_role': user.role,
+                        'requested_role': selected_role
+                    }, status=status.HTTP_403_FORBIDDEN)
+                
+                # Log successful role-based login
+                logger.info(f"User {username} (role: {user.role}) logged in to {selected_role} dashboard")
+            else:
+                # Default login without role specification
+                logger.info(f"User {username} (role: {user.role}) logged in")
+            
             # Generate JWT tokens
             refresh = RefreshToken.for_user(user)
             serializer = UserSerializer(user)
-            logger.info(f"User logged in: {username}")
-            return Response({
+            
+            response_data = {
                 'refresh': str(refresh),
                 'access': str(refresh.access_token),
-                'user': serializer.data
-            })
+                'user': serializer.data,
+                'permissions': {
+                    'can_access_owner': user_has_role_permission(user, 'owner'),
+                    'can_access_admin': user_has_role_permission(user, 'admin'),
+                    'can_access_warehouse': user_has_role_permission(user, 'warehouse'),
+                    'can_access_delivery': user_has_role_permission(user, 'delivery'),
+                }
+            }
+            
+            # Include selected role in response if provided
+            if selected_role:
+                response_data['selected_role'] = selected_role
+            
+            return Response(response_data)
+            
         except Exception as e:
             logger.error(f"Login error: {str(e)}")
             return Response({'error': f'Login failed: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -72,6 +128,35 @@ class CurrentUserView(APIView):
     def get(self, request):
         serializer = UserSerializer(request.user)
         return Response(serializer.data)
+
+class UserPermissionsView(APIView):
+    """Get user's role permissions and accessible dashboards"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        user = request.user
+        available_roles = []
+        
+        # Check which roles the user can access
+        roles_to_check = ['delivery', 'warehouse', 'admin', 'owner']
+        for role in roles_to_check:
+            if user_has_role_permission(user, role):
+                available_roles.append({
+                    'value': role,
+                    'label': role.title(),
+                    'can_access': True
+                })
+        
+        return Response({
+            'user_role': user.role,
+            'available_roles': available_roles,
+            'permissions': {
+                'can_access_owner': user_has_role_permission(user, 'owner'),
+                'can_access_admin': user_has_role_permission(user, 'admin'),
+                'can_access_warehouse': user_has_role_permission(user, 'warehouse'),
+                'can_access_delivery': user_has_role_permission(user, 'delivery'),
+            }
+        })
 
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
