@@ -2,7 +2,8 @@ from django.contrib import admin
 from django.utils.html import format_html
 from .models import (
     TaskType, Task, TaskTimeSession, TaskNote, TaskNotification,
-    TaskMaterial, TaskTemplate, TaskTemplateStep, WorkerProductivity
+    TaskMaterial, TaskTemplate, TaskTemplateStep, WorkerProductivity,
+    Notification
 )
 
 
@@ -145,8 +146,8 @@ class TaskMaterialAdmin(admin.ModelAdmin):
 
 @admin.register(TaskTemplate)
 class TaskTemplateAdmin(admin.ModelAdmin):
-    list_display = ['name', 'product_type', 'is_active', 'created_at']
-    list_filter = ['is_active', 'product_type', 'created_at']
+    list_display = ['name', 'task_type', 'priority', 'is_active', 'created_at']
+    list_filter = ['is_active', 'task_type', 'priority', 'created_at']
     search_fields = ['name', 'description']
 
 
@@ -173,3 +174,16 @@ class WorkerProductivityAdmin(admin.ModelAdmin):
         hours = total_seconds // 3600
         minutes = (total_seconds % 3600) // 60
         return f"{hours}h {minutes}m"
+
+
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    list_display = ['user', 'message_preview', 'type', 'priority', 'is_read', 'created_at']
+    list_filter = ['type', 'priority', 'is_read', 'created_at']
+    search_fields = ['user__username', 'message']
+    readonly_fields = ['created_at', 'read_at']
+    ordering = ['-created_at']
+    
+    def message_preview(self, obj):
+        return obj.message[:50] + '...' if len(obj.message) > 50 else obj.message
+    message_preview.short_description = 'Message'

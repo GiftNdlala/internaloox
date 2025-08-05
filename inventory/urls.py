@@ -13,4 +13,5 @@ router.register(r'predictions', views.MaterialConsumptionPredictionViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('materials/quick_stock_entry/', views.quick_stock_entry, name='quick_stock_entry'),
 ]

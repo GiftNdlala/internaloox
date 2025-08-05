@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
+from datetime import timedelta
 from .models import Order, Customer, PaymentProof, OrderHistory, Product, Color, Fabric, OrderItem, ColorReference, FabricReference
 from .serializers import (
     OrderSerializer, OrderListSerializer, OrderStatusUpdateSerializer,
@@ -97,6 +98,95 @@ class OrderViewSet(viewsets.ModelViewSet):
             return Response({
                 'error': 'You do not have permission to escalate this order or order is not eligible'
             }, status=status.HTTP_403_FORBIDDEN)
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def create_task(self, request, pk=None):
+        """Create a task within a specific order"""
+        from tasks.models import Task, TaskType, create_notification
+        from tasks.serializers import TaskSerializer
+        from users.models import User
+        
+        order = self.get_object()
+        user = request.user
+        
+        # Check if user can create tasks
+        if not user.can_manage_tasks:
+            return Response({
+                'error': 'You do not have permission to create tasks'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Validate input data
+        required_fields = ['title', 'task_type_id', 'assigned_to_id']
+        for field in required_fields:
+            if field not in request.data:
+                return Response({
+                    'error': f'Missing required field: {field}'
+                }, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            # Get task type
+            task_type = TaskType.objects.get(id=request.data['task_type_id'])
+            
+            # Get assigned worker
+            assigned_worker = User.objects.get(id=request.data['assigned_to_id'])
+            if not assigned_worker.is_warehouse_worker:
+                return Response({
+                    'error': 'Can only assign tasks to warehouse workers'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Create the task
+            task_data = {
+                'title': request.data['title'],
+                'description': request.data.get('description', ''),
+                'task_type': task_type,
+                'order': order,
+                'assigned_to': assigned_worker,
+                'assigned_by': user,
+                'priority': request.data.get('priority', 'normal'),
+                'instructions': request.data.get('instructions', ''),
+                'materials_needed': request.data.get('materials_needed', ''),
+                'estimated_duration': timedelta(minutes=request.data.get('estimated_duration', 60)),
+            }
+            
+            # Set deadline if provided
+            if 'deadline' in request.data:
+                from django.utils.dateparse import parse_datetime
+                deadline = parse_datetime(request.data['deadline'])
+                if deadline:
+                    task_data['deadline'] = deadline
+                    task_data['due_date'] = deadline
+            
+            task = Task.objects.create(**task_data)
+            
+            # Send notification to assigned worker
+            create_notification(
+                user=assigned_worker,
+                message=f"New task assigned: {task.title} for Order {order.order_number}",
+                notification_type='task_assigned',
+                priority='normal',
+                task=task,
+                order=order
+            )
+            
+            # Serialize and return task data
+            serializer = TaskSerializer(task)
+            return Response({
+                'message': 'Task created successfully',
+                'task': serializer.data
+            }, status=status.HTTP_201_CREATED)
+            
+        except TaskType.DoesNotExist:
+            return Response({
+                'error': 'Task type not found'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except User.DoesNotExist:
+            return Response({
+                'error': 'Assigned user not found'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'error': f'Failed to create task: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['get'])
     def queue_status(self, request):

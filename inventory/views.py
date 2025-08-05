@@ -2,7 +2,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db.models import Q, Sum, F
 from rest_framework import viewsets, status, filters
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
@@ -576,3 +576,88 @@ class MaterialConsumptionPredictionViewSet(viewsets.ReadOnlyModelViewSet):
             return Response(report_data)
         
         return Response({'error': 'Invalid report type'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def quick_stock_entry(request):
+    """Enhanced quick stock entry with batch support"""
+    entries = request.data.get('entries', [])
+    
+    if not entries:
+        return Response({'error': 'No entries provided'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    created_movements = []
+    errors = []
+    
+    for i, entry_data in enumerate(entries):
+        try:
+            # Validate required fields
+            required_fields = ['material_id', 'movement_type', 'quantity']
+            for field in required_fields:
+                if field not in entry_data:
+                    errors.append(f"Entry {i+1}: Missing required field '{field}'")
+                    continue
+            
+            if errors:
+                continue
+                
+            material = Material.objects.get(id=entry_data['material_id'])
+            
+            # Create stock movement
+            movement_data = {
+                'material': material,
+                'movement_type': entry_data['movement_type'],  # 'in' or 'out'
+                'quantity': float(entry_data['quantity']),
+                'reason': entry_data.get('reason', ''),
+                'location': entry_data.get('location', ''),
+                'batch_number': entry_data.get('batch_number', ''),
+                'created_by': request.user
+            }
+            
+            # Set expiry date if provided
+            if entry_data.get('expiry_date'):
+                from django.utils.dateparse import parse_date
+                expiry_date = parse_date(entry_data['expiry_date'])
+                if expiry_date:
+                    movement_data['expiry_date'] = expiry_date
+            
+            movement = StockMovement.objects.create(**movement_data)
+            
+            # Update material stock
+            if entry_data['movement_type'] == 'in':
+                material.current_stock += movement_data['quantity']
+            else:  # 'out'
+                material.current_stock -= movement_data['quantity']
+                if material.current_stock < 0:
+                    material.current_stock = 0  # Prevent negative stock
+            
+            material.save()
+            
+            created_movements.append({
+                'movement_id': movement.id,
+                'material_name': material.name,
+                'movement_type': movement.movement_type,
+                'quantity': movement.quantity,
+                'new_stock_level': material.current_stock,
+                'status': 'success'
+            })
+            
+        except Material.DoesNotExist:
+            errors.append(f"Entry {i+1}: Material with ID {entry_data.get('material_id')} not found")
+        except ValueError as e:
+            errors.append(f"Entry {i+1}: Invalid quantity value")
+        except Exception as e:
+            errors.append(f"Entry {i+1}: {str(e)}")
+    
+    response_data = {
+        'message': f'{len(created_movements)} stock movements created',
+        'movements': created_movements,
+        'success_count': len(created_movements),
+        'error_count': len(errors)
+    }
+    
+    if errors:
+        response_data['errors'] = errors
+    
+    return Response(response_data)

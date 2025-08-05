@@ -16,9 +16,32 @@ class TaskType(models.Model):
     
     # Task sequence (for workflow ordering)
     sequence_order = models.IntegerField(default=0, help_text="Order in production workflow")
+    color_code = models.CharField(max_length=7, default="#007bff", help_text="Color for UI display")
     
     class Meta:
         ordering = ['sequence_order', 'name']
+    
+    def __str__(self):
+        return self.name
+
+
+class TaskTemplate(models.Model):
+    """Pre-defined task templates for common workflows"""
+    name = models.CharField(max_length=100)
+    description = models.TextField()
+    task_type = models.ForeignKey(TaskType, on_delete=models.CASCADE)
+    priority = models.CharField(max_length=20, choices=[
+        ('low', 'Low'),
+        ('normal', 'Normal'),
+        ('high', 'High'),
+        ('urgent', 'Urgent'),
+    ], default='normal')
+    estimated_duration = models.IntegerField(help_text="Duration in minutes")
+    instructions = models.TextField(blank=True)
+    materials_needed = models.TextField(blank=True)
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
     
     def __str__(self):
         return self.name
@@ -42,6 +65,7 @@ class Task(models.Model):
         ('normal', 'Normal'),
         ('high', 'High'),
         ('urgent', 'Urgent'),
+        ('critical', 'Critical'),  # Added critical priority
     ]
     
     # Basic task info
@@ -57,7 +81,7 @@ class Task(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='assigned')
     priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default='normal')
     
-    # Order relationship
+    # Order relationship - REQUIRED for order-task workflow
     order = models.ForeignKey('orders.Order', on_delete=models.CASCADE, related_name='tasks', null=True, blank=True)
     order_item = models.ForeignKey('orders.OrderItem', on_delete=models.CASCADE, related_name='tasks', null=True, blank=True)
     
@@ -66,9 +90,23 @@ class Task(models.Model):
     actual_start_time = models.DateTimeField(null=True, blank=True)
     actual_end_time = models.DateTimeField(null=True, blank=True)
     total_time_spent = models.DurationField(default=timedelta(0))
+    time_elapsed_seconds = models.IntegerField(default=0, help_text="Elapsed time in seconds for real-time tracking")
+    is_timer_running = models.BooleanField(default=False)
     
     # Deadlines
     due_date = models.DateTimeField(null=True, blank=True)
+    deadline = models.DateTimeField(null=True, blank=True)  # Alternative field name for frontend compatibility
+    
+    # Additional workflow fields
+    instructions = models.TextField(blank=True)
+    materials_needed = models.TextField(blank=True)
+    completion_notes = models.TextField(blank=True)
+    progress_percentage = models.IntegerField(default=0)
+    
+    # Approval workflow
+    approved_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_tasks')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
     
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
@@ -84,9 +122,10 @@ class Task(models.Model):
     @property
     def is_overdue(self):
         """Check if task is overdue"""
-        if not self.due_date:
+        deadline = self.deadline or self.due_date
+        if not deadline:
             return False
-        return timezone.now() > self.due_date and self.status not in ['completed', 'approved', 'cancelled']
+        return timezone.now() > deadline and self.status not in ['completed', 'approved', 'cancelled']
     
     @property
     def time_elapsed(self):
@@ -100,7 +139,66 @@ class Task(models.Model):
     @property
     def is_running(self):
         """Check if task is currently running (started but not completed)"""
-        return self.status == 'started' and self.actual_start_time and not self.actual_end_time
+        return self.status == 'started' and self.is_timer_running
+
+
+class Notification(models.Model):
+    """System notifications for users"""
+    PRIORITY_CHOICES = [
+        ('low', 'Low'),
+        ('normal', 'Normal'),
+        ('high', 'High'),
+        ('critical', 'Critical'),
+    ]
+    
+    TYPE_CHOICES = [
+        ('info', 'Information'),
+        ('success', 'Success'),
+        ('warning', 'Warning'),
+        ('error', 'Error'),
+        ('task_assigned', 'Task Assigned'),
+        ('task_completed', 'Task Completed'),
+        ('task_overdue', 'Task Overdue'),
+        ('stock_alert', 'Stock Alert'),
+    ]
+    
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    message = models.TextField()
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='info')
+    priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='normal')
+    is_read = models.BooleanField(default=False)
+    
+    # Optional links to related objects
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, null=True, blank=True)
+    order = models.ForeignKey('orders.Order', on_delete=models.CASCADE, null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.message[:50]}..."
+    
+    def mark_as_read(self):
+        """Mark notification as read"""
+        if not self.is_read:
+            self.is_read = True
+            self.read_at = timezone.now()
+            self.save()
+
+
+def create_notification(user, message, notification_type='info', priority='normal', task=None, order=None):
+    """Helper function to create notifications"""
+    return Notification.objects.create(
+        user=user,
+        message=message,
+        type=notification_type,
+        priority=priority,
+        task=task,
+        order=order
+    )
     
     def start_task(self):
         """Start the task and begin time tracking"""
@@ -358,21 +456,6 @@ class TaskMaterial(models.Model):
             )
             return True
         return False
-
-
-class TaskTemplate(models.Model):
-    """Templates for common task sequences"""
-    name = models.CharField(max_length=200)
-    description = models.TextField(blank=True, null=True)
-    product_type = models.ForeignKey('orders.Product', on_delete=models.CASCADE, null=True, blank=True)
-    is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    
-    class Meta:
-        ordering = ['name']
-    
-    def __str__(self):
-        return self.name
 
 
 class TaskTemplateStep(models.Model):

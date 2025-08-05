@@ -11,7 +11,8 @@ from datetime import timedelta, date
 from users.models import User
 from .models import (
     TaskType, Task, TaskTimeSession, TaskNote, TaskNotification,
-    TaskMaterial, TaskTemplate, TaskTemplateStep, WorkerProductivity
+    TaskMaterial, TaskTemplate, TaskTemplateStep, WorkerProductivity,
+    Notification, create_notification
 )
 from .serializers import (
     TaskTypeSerializer, TaskSerializer, TaskListSerializer, TaskTimeSessionSerializer,
@@ -54,7 +55,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         user = self.request.user
         
         # If user is warehouse worker, only show their tasks
-        if user.role == 'warehouse':
+        if user.is_warehouse_worker and not user.can_manage_tasks:
             queryset = queryset.filter(assigned_to=user)
         
         # Filter by overdue status
@@ -134,7 +135,14 @@ class TaskViewSet(viewsets.ModelViewSet):
                 return Response({
                     'message': message,
                     'task_status': task.status,
-                    'task_id': task.id
+                    'task_id': task.id,
+                    'is_running': task.is_timer_running,
+                    'time_elapsed': task.time_elapsed_seconds,
+                    'progress_percentage': task.progress_percentage,
+                    'can_start': task.status == 'assigned',
+                    'can_pause': task.status == 'started',
+                    'can_resume': task.status == 'paused',
+                    'can_complete': task.status in ['started', 'paused']
                 })
             else:
                 return Response({'error': f'Cannot {action_type} task in current state'}, 
@@ -192,6 +200,45 @@ class TaskViewSet(viewsets.ModelViewSet):
             return Response({'results': created_tasks})
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=False, methods=['post'])
+    def bulk_reassign(self, request):
+        """Reassign multiple existing tasks to a worker"""
+        if not request.user.can_manage_tasks:
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        
+        task_ids = request.data.get('task_ids', [])
+        worker_id = request.data.get('worker_id')
+        
+        if not task_ids or not worker_id:
+            return Response({'error': 'task_ids and worker_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            worker = User.objects.get(id=worker_id)
+            if not worker.is_warehouse_worker:
+                return Response({'error': 'Can only assign tasks to warehouse workers'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            tasks = Task.objects.filter(id__in=task_ids)
+            updated_count = tasks.update(
+                assigned_to=worker,
+                status='assigned'
+            )
+            
+            # Send notification to worker
+            create_notification(
+                user=worker,
+                message=f"{updated_count} tasks assigned to you",
+                notification_type='task_assigned',
+                priority='normal'
+            )
+            
+            return Response({
+                'message': f'{updated_count} tasks assigned successfully',
+                'assigned_count': updated_count
+            })
+            
+        except User.DoesNotExist:
+            return Response({'error': 'Worker not found'}, status=status.HTTP_404_NOT_FOUND)
     
     @action(detail=False, methods=['get'])
     def dashboard(self, request):
@@ -589,7 +636,9 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
             return Response({'error': 'Access denied'}, status=status.HTTP_403_FORBIDDEN)
         
         # All warehouse workers
-        warehouse_workers = User.objects.filter(role='warehouse')
+        warehouse_workers = User.objects.filter(
+            Q(role='warehouse_worker') | Q(role='warehouse')
+        )
         
         # Task overview
         all_tasks = Task.objects.all()
@@ -656,7 +705,10 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
     def task_assignment_data(self, request):
         """Data needed for task assignment interface"""
         # Available workers
-        warehouse_workers = User.objects.filter(role='warehouse', is_active=True)
+        warehouse_workers = User.objects.filter(
+            Q(role='warehouse_worker') | Q(role='warehouse'), 
+            is_active=True
+        )
         
         # Available task types
         task_types = TaskType.objects.filter(is_active=True)
@@ -881,7 +933,7 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
         user = request.user
         
         # Get tasks assigned to current user (if warehouse worker)
-        if user.role == 'warehouse':
+        if user.is_warehouse_worker and not user.can_manage_tasks:
             tasks = Task.objects.filter(assigned_to=user)
         else:
             tasks = Task.objects.all()
@@ -967,3 +1019,138 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
         hours = total_seconds // 3600
         minutes = (total_seconds % 3600) // 60
         return f"{hours}h {minutes}m"
+    
+    @action(detail=False, methods=['get'])
+    def real_time_updates(self, request):
+        """Get real-time updates for dashboard"""
+        from django.utils.dateparse import parse_datetime
+        
+        since = request.GET.get('since')
+        user = request.user
+        
+        updates = {
+            'has_updates': False,
+            'notifications': [],
+            'task_updates': [],
+            'stock_alerts': [],
+            'timestamp': timezone.now().isoformat()
+        }
+        
+        # Get notifications since last check
+        notifications_qs = Notification.objects.filter(user=user)
+        if since:
+            try:
+                since_dt = parse_datetime(since)
+                if since_dt:
+                    notifications_qs = notifications_qs.filter(created_at__gt=since_dt)
+            except:
+                pass
+        
+        notifications = notifications_qs.order_by('-created_at')[:10]
+        if notifications.exists():
+            updates['has_updates'] = True
+            updates['notifications'] = [{
+                'id': n.id,
+                'message': n.message,
+                'type': n.type,
+                'priority': n.priority,
+                'is_read': n.is_read,
+                'created_at': n.created_at.isoformat(),
+                'task_id': n.task_id if n.task else None,
+                'order_id': n.order_id if n.order else None
+            } for n in notifications]
+        
+        # Get task updates for managers
+        if user.can_manage_tasks:
+            task_updates_qs = Task.objects.filter(
+                status__in=['started', 'completed', 'paused']
+            )
+            if since:
+                try:
+                    since_dt = parse_datetime(since)
+                    if since_dt:
+                        task_updates_qs = task_updates_qs.filter(updated_at__gt=since_dt)
+                except:
+                    pass
+            
+            task_updates = task_updates_qs.select_related('assigned_to', 'order')[:20]
+            if task_updates.exists():
+                updates['has_updates'] = True
+                updates['task_updates'] = [{
+                    'id': t.id,
+                    'title': t.title,
+                    'status': t.status,
+                    'assigned_to': t.assigned_to.get_full_name() or t.assigned_to.username,
+                    'order_number': t.order.order_number if t.order else None,
+                    'is_running': t.is_timer_running,
+                    'updated_at': t.updated_at.isoformat()
+                } for t in task_updates]
+        
+        # Get stock alerts (basic implementation)
+        if user.role in ['warehouse_manager', 'admin', 'owner', 'warehouse_worker', 'warehouse']:
+            try:
+                from inventory.models import Material
+                stock_alerts = Material.objects.filter(
+                    current_stock__lte=models.F('minimum_stock_level')
+                )[:10]
+                if stock_alerts.exists():
+                    updates['has_updates'] = True
+                    updates['stock_alerts'] = [{
+                        'id': m.id,
+                        'name': m.name,
+                        'current_stock': m.current_stock,
+                        'minimum_stock_level': m.minimum_stock_level,
+                        'unit': m.unit
+                    } for m in stock_alerts]
+            except:
+                # If inventory app isn't available, skip stock alerts
+                pass
+        
+        return Response(updates)
+
+
+class NotificationViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing notifications"""
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        return Notification.objects.filter(user=self.request.user).order_by('-created_at')
+    
+    def get_serializer_class(self):
+        # For now, return a simple dict representation
+        from rest_framework import serializers
+        
+        class NotificationSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = Notification
+                fields = ['id', 'message', 'type', 'priority', 'is_read', 'created_at', 'task', 'order']
+                read_only_fields = ['id', 'created_at']
+        
+        return NotificationSerializer
+    
+    @action(detail=False, methods=['post'])
+    def mark_all_read(self, request):
+        """Mark all notifications as read for current user"""
+        updated_count = Notification.objects.filter(
+            user=request.user,
+            is_read=False
+        ).update(
+            is_read=True,
+            read_at=timezone.now()
+        )
+        
+        return Response({
+            'message': f'{updated_count} notifications marked as read',
+            'updated_count': updated_count
+        })
+    
+    @action(detail=True, methods=['post'])
+    def mark_read(self, request, pk=None):
+        """Mark a specific notification as read"""
+        notification = self.get_object()
+        notification.mark_as_read()
+        
+        return Response({
+            'message': 'Notification marked as read',
+            'is_read': notification.is_read
+        })
