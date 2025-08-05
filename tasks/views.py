@@ -89,7 +89,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
     
     @action(detail=True, methods=['post'])
-    def action(self, request, pk=None):
+    def perform_action(self, request, pk=None):
         """Perform actions on task (start, pause, complete, etc.)"""
         task = get_object_or_404(Task, pk=pk)
         serializer = TaskActionSerializer(data=request.data)

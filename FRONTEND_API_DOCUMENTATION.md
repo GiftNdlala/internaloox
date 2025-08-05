@@ -292,7 +292,7 @@ Returns tasks organized by order for warehouse workers.
 Returns tasks assigned to the current user.
 
 ### 2. Task Actions (Start, Pause, Complete)
-**POST** `/api/tasks/tasks/{task_id}/action/`
+**POST** `/api/tasks/tasks/{task_id}/perform_action/`
 
 **Request Body:**
 ```json
@@ -618,7 +618,7 @@ const WorkerOrderTasks = () => {
 
   const handleTaskAction = async (taskId, action) => {
     const token = localStorage.getItem('access_token');
-    const response = await fetch(`${API_BASE_URL}/api/tasks/tasks/${taskId}/action/`, {
+    const response = await fetch(`${API_BASE_URL}/api/tasks/tasks/${taskId}/perform_action/`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -706,7 +706,7 @@ export const handleTaskAction = async (taskId, action, reason = '') => {
   const token = localStorage.getItem('access_token');
   
   try {
-    const response = await fetch(`${API_BASE_URL}/api/tasks/tasks/${taskId}/action/`, {
+    const response = await fetch(`${API_BASE_URL}/api/tasks/tasks/${taskId}/perform_action/`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,

@@ -347,9 +347,9 @@ const getTasksByOrder = async () => {
 
 #### Task Actions (Start/Pause/Complete)
 ```javascript
-// POST /api/tasks/tasks/{task_id}/action/
+// POST /api/tasks/tasks/{task_id}/perform_action/
 const performTaskAction = async (taskId, action, reason = '') => {
-  return await api.post(`/tasks/tasks/${taskId}/action/`, { action, reason });
+  return await api.post(`/tasks/tasks/${taskId}/perform_action/`, { action, reason });
 };
 
 /* Available Actions:
@@ -678,7 +678,7 @@ export const useTaskActions = () => {
   const performAction = async (taskId, action, reason = '') => {
     setLoading(true);
     try {
-      const result = await api.post(`/tasks/tasks/${taskId}/action/`, {
+      const result = await api.post(`/tasks/tasks/${taskId}/perform_action/`, {
         action,
         reason,
       });
@@ -2138,7 +2138,7 @@ describe('WorkerOrderTasks', () => {
     
     await user.click(screen.getByText('▶️ Start'));
     
-    expect(api.post).toHaveBeenCalledWith('/tasks/tasks/1/action/', {
+    expect(api.post).toHaveBeenCalledWith('/tasks/tasks/1/perform_action/', {
       action: 'start',
       reason: ''
     });
