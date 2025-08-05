@@ -510,3 +510,269 @@ class WorkerProductivityViewSet(viewsets.ReadOnlyModelViewSet):
             },
             'worker_summaries': list(worker_summaries.values())
         })
+
+
+# Add comprehensive warehouse worker dashboard endpoints
+class WarehouseDashboardViewSet(viewsets.ViewSet):
+    """Comprehensive warehouse dashboard endpoints for frontend"""
+    permission_classes = [IsAuthenticated]
+    
+    @action(detail=False, methods=['get'])
+    def worker_dashboard(self, request):
+        """Complete dashboard for warehouse workers"""
+        user = request.user
+        
+        # Worker's tasks
+        my_tasks = Task.objects.filter(assigned_to=user).select_related('task_type', 'order')
+        
+        # Task statistics
+        total_tasks = my_tasks.count()
+        assigned_tasks = my_tasks.filter(status='assigned').count()
+        in_progress_tasks = my_tasks.filter(status='started').count()
+        completed_today = my_tasks.filter(
+            status__in=['completed', 'approved'],
+            completed_at__date=timezone.now().date()
+        ).count()
+        overdue_tasks = my_tasks.filter(
+            due_date__lt=timezone.now(),
+            status__in=['assigned', 'started', 'paused']
+        ).count()
+        
+        # Current active task (if any)
+        active_task = my_tasks.filter(status='started').first()
+        
+        # Recent notifications
+        recent_notifications = TaskNotification.objects.filter(
+            recipient=user,
+            is_read=False
+        ).order_by('-created_at')[:5]
+        
+        # Today's productivity
+        today = timezone.now().date()
+        today_productivity = WorkerProductivity.objects.filter(
+            worker=user,
+            date=today
+        ).first()
+        
+        # Time tracking for active task
+        active_session = None
+        if active_task:
+            active_session = active_task.time_sessions.filter(ended_at__isnull=True).first()
+        
+        return Response({
+            'worker_info': {
+                'name': user.get_full_name() or user.username,
+                'role': user.get_role_display(),
+                'username': user.username
+            },
+            'task_summary': {
+                'total_tasks': total_tasks,
+                'assigned': assigned_tasks,
+                'in_progress': in_progress_tasks,
+                'completed_today': completed_today,
+                'overdue': overdue_tasks
+            },
+            'active_task': TaskSerializer(active_task).data if active_task else None,
+            'active_session': TaskTimeSessionSerializer(active_session).data if active_session else None,
+            'recent_tasks': TaskListSerializer(my_tasks.order_by('-created_at')[:10], many=True).data,
+            'notifications': TaskNotificationSerializer(recent_notifications, many=True).data,
+            'today_productivity': WorkerProductivitySerializer(today_productivity).data if today_productivity else None
+        })
+    
+    @action(detail=False, methods=['get'])
+    def supervisor_dashboard(self, request):
+        """Dashboard for supervisors (admin, owner, warehouse managers)"""
+        user = request.user
+        
+        # Only supervisors can access
+        if user.role not in ['owner', 'admin', 'warehouse']:
+            return Response({'error': 'Access denied'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # All warehouse workers
+        warehouse_workers = User.objects.filter(role='warehouse')
+        
+        # Task overview
+        all_tasks = Task.objects.all()
+        total_tasks = all_tasks.count()
+        assigned_tasks = all_tasks.filter(status='assigned').count()
+        in_progress_tasks = all_tasks.filter(status='started').count()
+        completed_tasks = all_tasks.filter(status__in=['completed', 'approved']).count()
+        overdue_tasks = all_tasks.filter(
+            due_date__lt=timezone.now(),
+            status__in=['assigned', 'started', 'paused']
+        ).count()
+        
+        # Worker status
+        worker_status = []
+        for worker in warehouse_workers:
+            worker_tasks = all_tasks.filter(assigned_to=worker)
+            active_task = worker_tasks.filter(status='started').first()
+            
+            worker_status.append({
+                'worker_id': worker.id,
+                'worker_name': worker.get_full_name() or worker.username,
+                'total_tasks': worker_tasks.count(),
+                'active_task': TaskListSerializer(active_task).data if active_task else None,
+                'completed_today': worker_tasks.filter(
+                    status__in=['completed', 'approved'],
+                    completed_at__date=timezone.now().date()
+                ).count(),
+                'overdue_tasks': worker_tasks.filter(
+                    due_date__lt=timezone.now(),
+                    status__in=['assigned', 'started', 'paused']
+                ).count()
+            })
+        
+        # Recent task activities
+        recent_activities = Task.objects.filter(
+            updated_at__gte=timezone.now() - timedelta(hours=24)
+        ).select_related('assigned_to', 'task_type').order_by('-updated_at')[:20]
+        
+        # Tasks needing approval
+        tasks_for_approval = all_tasks.filter(status='completed')
+        
+        return Response({
+            'overview': {
+                'total_tasks': total_tasks,
+                'assigned': assigned_tasks,
+                'in_progress': in_progress_tasks,
+                'completed': completed_tasks,
+                'overdue': overdue_tasks,
+                'total_workers': warehouse_workers.count()
+            },
+            'worker_status': worker_status,
+            'recent_activities': TaskListSerializer(recent_activities, many=True).data,
+            'tasks_for_approval': TaskListSerializer(tasks_for_approval, many=True).data,
+            'overdue_tasks': TaskListSerializer(
+                all_tasks.filter(
+                    due_date__lt=timezone.now(),
+                    status__in=['assigned', 'started', 'paused']
+                )[:10], 
+                many=True
+            ).data
+        })
+    
+    @action(detail=False, methods=['get'])
+    def task_assignment_data(self, request):
+        """Data needed for task assignment interface"""
+        # Available workers
+        warehouse_workers = User.objects.filter(role='warehouse', is_active=True)
+        
+        # Available task types
+        task_types = TaskType.objects.filter(is_active=True)
+        
+        # Recent orders that might need tasks
+        from orders.models import Order
+        recent_orders = Order.objects.filter(
+            order_status__in=['deposit_paid', 'order_ready']
+        ).order_by('-created_at')[:20]
+        
+        # Task templates
+        task_templates = TaskTemplate.objects.filter(is_active=True)
+        
+        return Response({
+            'workers': [
+                {
+                    'id': worker.id,
+                    'name': worker.get_full_name() or worker.username,
+                    'username': worker.username,
+                    'active_tasks_count': Task.objects.filter(
+                        assigned_to=worker,
+                        status__in=['assigned', 'started']
+                    ).count()
+                }
+                for worker in warehouse_workers
+            ],
+            'task_types': TaskTypeSerializer(task_types, many=True).data,
+            'recent_orders': [
+                {
+                    'id': order.id,
+                    'order_number': order.order_number,
+                    'customer_name': order.customer.name if order.customer else order.customer_name,
+                    'status': order.order_status,
+                    'created_at': order.created_at
+                }
+                for order in recent_orders
+            ],
+            'task_templates': TaskTemplateSerializer(task_templates, many=True).data
+        })
+    
+    @action(detail=False, methods=['post'])
+    def quick_task_assign(self, request):
+        """Quick task assignment for supervisors"""
+        assigned_to_id = request.data.get('assigned_to')
+        task_type_id = request.data.get('task_type')
+        title = request.data.get('title')
+        description = request.data.get('description', '')
+        priority = request.data.get('priority', 'normal')
+        due_date = request.data.get('due_date')
+        order_id = request.data.get('order_id')
+        
+        try:
+            assigned_to = User.objects.get(id=assigned_to_id, role='warehouse')
+            task_type = TaskType.objects.get(id=task_type_id)
+            
+            task = Task.objects.create(
+                assigned_to=assigned_to,
+                assigned_by=request.user,
+                task_type=task_type,
+                title=title,
+                description=description,
+                priority=priority,
+                due_date=due_date,
+                order_id=order_id,
+                estimated_duration=timedelta(minutes=task_type.estimated_duration_minutes)
+            )
+            
+            return Response({
+                'message': 'Task assigned successfully',
+                'task': TaskSerializer(task).data
+            })
+            
+        except (User.DoesNotExist, TaskType.DoesNotExist) as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=False, methods=['get'])
+    def real_time_updates(self, request):
+        """Real-time updates for dashboard (to be called periodically)"""
+        user = request.user
+        
+        # Get timestamp from last check
+        last_check = request.query_params.get('last_check')
+        if last_check:
+            last_check = timezone.datetime.fromisoformat(last_check.replace('Z', '+00:00'))
+        else:
+            last_check = timezone.now() - timedelta(minutes=5)
+        
+        updates = {
+            'timestamp': timezone.now().isoformat(),
+            'new_notifications': [],
+            'task_updates': [],
+            'stock_alerts': []
+        }
+        
+        # New notifications
+        new_notifications = TaskNotification.objects.filter(
+            recipient=user,
+            created_at__gt=last_check
+        ).order_by('-created_at')
+        updates['new_notifications'] = TaskNotificationSerializer(new_notifications, many=True).data
+        
+        # Task updates (for supervisors)
+        if user.role in ['owner', 'admin', 'warehouse']:
+            updated_tasks = Task.objects.filter(
+                updated_at__gt=last_check
+            ).select_related('assigned_to', 'task_type')
+            updates['task_updates'] = TaskListSerializer(updated_tasks, many=True).data
+        
+        # Stock alerts (if user has inventory access)
+        if user.role in ['owner', 'admin', 'warehouse']:
+            from inventory.models import StockAlert
+            new_alerts = StockAlert.objects.filter(
+                status='active',
+                created_at__gt=last_check
+            ).select_related('material')
+            from inventory.serializers import StockAlertSerializer
+            updates['stock_alerts'] = StockAlertSerializer(new_alerts, many=True).data
+        
+        return Response(updates)

@@ -205,6 +205,158 @@ class MaterialViewSet(viewsets.ModelViewSet):
             }
         })
 
+    @action(detail=False, methods=['get'])
+    def warehouse_dashboard(self, request):
+        """Complete warehouse dashboard data for frontend"""
+        # Stock overview
+        total_materials = Material.objects.filter(is_active=True).count()
+        low_stock_materials = Material.objects.filter(
+            is_active=True,
+            current_stock__lte=F('minimum_stock')
+        )
+        critical_stock_materials = Material.objects.filter(
+            is_active=True,
+            current_stock__lte=F('minimum_stock') * 0.5
+        )
+        
+        # Calculate total inventory value
+        total_value = Material.objects.filter(is_active=True).aggregate(
+            total=Sum(F('current_stock') * F('cost_per_unit'))
+        )['total'] or 0
+        
+        # Recent stock movements
+        recent_movements = StockMovement.objects.select_related('material', 'created_by').order_by('-created_at')[:10]
+        
+        # Active alerts
+        active_alerts = StockAlert.objects.filter(status='active').select_related('material')[:5]
+        
+        # Materials by category
+        materials_by_category = {}
+        for category in MaterialCategory.objects.filter(is_active=True):
+            materials_by_category[category.get_name_display()] = {
+                'total': Material.objects.filter(category=category, is_active=True).count(),
+                'low_stock': Material.objects.filter(
+                    category=category, 
+                    is_active=True,
+                    current_stock__lte=F('minimum_stock')
+                ).count(),
+                'total_value': Material.objects.filter(
+                    category=category, 
+                    is_active=True
+                ).aggregate(
+                    total=Sum(F('current_stock') * F('cost_per_unit'))
+                )['total'] or 0
+            }
+        
+        # Top suppliers by material count
+        supplier_stats = []
+        for supplier in Supplier.objects.filter(is_active=True):
+            material_count = Material.objects.filter(primary_supplier=supplier, is_active=True).count()
+            if material_count > 0:
+                supplier_stats.append({
+                    'id': supplier.id,
+                    'name': supplier.name,
+                    'material_count': material_count,
+                    'contact_person': supplier.contact_person,
+                    'phone': supplier.phone
+                })
+        
+        return Response({
+            'overview': {
+                'total_materials': total_materials,
+                'low_stock_count': low_stock_materials.count(),
+                'critical_stock_count': critical_stock_materials.count(),
+                'total_inventory_value': float(total_value),
+                'active_alerts_count': active_alerts.count()
+            },
+            'stock_status': {
+                'optimal': total_materials - low_stock_materials.count(),
+                'low': low_stock_materials.count() - critical_stock_materials.count(),
+                'critical': critical_stock_materials.count()
+            },
+            'low_stock_materials': MaterialListSerializer(low_stock_materials[:10], many=True).data,
+            'critical_stock_materials': MaterialListSerializer(critical_stock_materials, many=True).data,
+            'recent_movements': StockMovementSerializer(recent_movements, many=True).data,
+            'active_alerts': StockAlertSerializer(active_alerts, many=True).data,
+            'materials_by_category': materials_by_category,
+            'top_suppliers': sorted(supplier_stats, key=lambda x: x['material_count'], reverse=True)[:5]
+        })
+    
+    @action(detail=False, methods=['get'])
+    def stock_locations(self, request):
+        """Get stock locations for materials (for frontend location tracking)"""
+        # This can be extended later with actual location tracking
+        # For now, return materials with their basic info
+        materials = Material.objects.filter(is_active=True).select_related('category', 'primary_supplier')
+        
+        locations_data = []
+        for material in materials:
+            locations_data.append({
+                'material_id': material.id,
+                'material_name': material.name,
+                'category': material.category.get_name_display(),
+                'current_stock': float(material.current_stock),
+                'unit': material.get_unit_display(),
+                'location': f"Section {material.category.name.upper()}-{material.id:03d}",  # Generated location
+                'last_updated': material.updated_at,
+                'supplier': material.primary_supplier.name if material.primary_supplier else None
+            })
+        
+        return Response(locations_data)
+    
+    @action(detail=False, methods=['post'])
+    def quick_stock_entry(self, request):
+        """Quick stock entry endpoint for warehouse workers"""
+        entries = request.data.get('entries', [])
+        results = []
+        
+        for entry in entries:
+            try:
+                material = Material.objects.get(id=entry['material_id'])
+                quantity = float(entry['quantity'])
+                reason = entry.get('reason', 'Stock entry')
+                unit_cost = float(entry.get('unit_cost', material.cost_per_unit))
+                location = entry.get('location', '')
+                
+                # Create stock movement
+                movement = StockMovement.objects.create(
+                    material=material,
+                    movement_type='in',
+                    quantity=quantity,
+                    unit_cost=unit_cost,
+                    reason=reason,
+                    notes=f"Location: {location}" if location else "",
+                    created_by=request.user
+                )
+                
+                results.append({
+                    'material_id': material.id,
+                    'material_name': material.name,
+                    'status': 'success',
+                    'new_stock': float(material.current_stock),
+                    'movement_id': movement.id
+                })
+                
+            except Material.DoesNotExist:
+                results.append({
+                    'material_id': entry.get('material_id'),
+                    'status': 'error',
+                    'message': 'Material not found'
+                })
+            except (ValueError, KeyError) as e:
+                results.append({
+                    'material_id': entry.get('material_id'),
+                    'status': 'error',
+                    'message': str(e)
+                })
+        
+        return Response({
+            'results': results,
+            'total_processed': len(results),
+            'successful': len([r for r in results if r['status'] == 'success']),
+            'errors': len([r for r in results if r['status'] == 'error'])
+        })
+
 
 class StockMovementViewSet(viewsets.ModelViewSet):
     queryset = StockMovement.objects.all()

@@ -11,6 +11,7 @@ router.register(r'notifications', views.TaskNotificationViewSet)
 router.register(r'materials', views.TaskMaterialViewSet)
 router.register(r'templates', views.TaskTemplateViewSet)
 router.register(r'productivity', views.WorkerProductivityViewSet)
+router.register(r'dashboard', views.WarehouseDashboardViewSet, basename='warehouse-dashboard')
 
 urlpatterns = [
     path('', include(router.urls)),
