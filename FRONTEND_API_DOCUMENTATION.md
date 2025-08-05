@@ -114,6 +114,176 @@ Returns complete inventory dashboard data.
 }
 ```
 
+## 📋 Order-Task Management Workflow
+
+### 1. Get Warehouse Orders (For Task Assignment)
+**GET** `/api/orders/warehouse_orders/`
+
+Returns orders ready for warehouse processing, organized by urgency.
+
+**Response:**
+```json
+{
+  "orders": [
+    {
+      "id": 45,
+      "order_number": "OOX000045",
+      "customer_name": "John Doe",
+      "urgency": "high",
+      "days_until_deadline": 3,
+      "task_counts": {
+        "total": 2,
+        "not_started": 1,
+        "in_progress": 1,
+        "completed": 0
+      },
+      "items_count": 3,
+      "total_amount": 5500.00
+    }
+  ],
+  "summary": {
+    "total_orders": 12,
+    "critical": 2,
+    "high": 4,
+    "medium": 3,
+    "low": 3
+  }
+}
+```
+
+### 2. Get Order Details for Task Assignment
+**GET** `/api/orders/{order_id}/order_details_for_tasks/`
+
+Returns detailed order information including items and existing tasks.
+
+**Response:**
+```json
+{
+  "order": {
+    "id": 45,
+    "order_number": "OOX000045",
+    "customer_name": "John Doe",
+    "delivery_deadline": "2024-12-25",
+    "total_amount": 5500.00
+  },
+  "items": [
+    {
+      "id": 123,
+      "product_name": "L-Shaped Couch",
+      "quantity": 1,
+      "fabric_name": "Premium Suede",
+      "color_name": "Navy Blue",
+      "required_materials": [
+        {
+          "material_name": "Suede Fabric",
+          "total_needed": 15.5,
+          "unit": "Meters"
+        }
+      ]
+    }
+  ],
+  "existing_tasks": [...],
+  "task_summary": {
+    "total_tasks": 2,
+    "completed": 0,
+    "in_progress": 1,
+    "pending": 1
+  }
+}
+```
+
+### 3. Assign Multiple Tasks to Order
+**POST** `/api/orders/{order_id}/assign_tasks_to_order/`
+
+Assigns multiple tasks to an order with specific workers.
+
+**Request Body:**
+```json
+{
+  "tasks": [
+    {
+      "task_type_id": 2,
+      "assigned_to_id": 5,
+      "title": "Cutting - Order OOX000045",
+      "description": "Cut fabric and foam for L-shaped couch",
+      "priority": "high",
+      "due_date": "2024-12-22T16:00:00Z",
+      "order_item_id": 123,
+      "required_materials": [
+        {
+          "material_id": 1,
+          "quantity_needed": 15.5
+        }
+      ]
+    },
+    {
+      "task_type_id": 5,
+      "assigned_to_id": 7,
+      "title": "Upholstery - Order OOX000045",
+      "priority": "high",
+      "due_date": "2024-12-23T16:00:00Z"
+    }
+  ]
+}
+```
+
+### 4. Get Orders with Tasks (Supervisor View)
+**GET** `/api/tasks/dashboard/orders_with_tasks/`
+
+Returns orders organized by task completion status.
+
+**Response:**
+```json
+{
+  "orders_by_status": {
+    "no_tasks": [...],
+    "in_progress": [...],
+    "completed": [...],
+    "mixed_status": [...]
+  },
+  "summary": {
+    "no_tasks": 3,
+    "in_progress": 5,
+    "completed": 2,
+    "total_orders": 10
+  }
+}
+```
+
+### 5. Get Tasks by Order (Worker View)
+**GET** `/api/tasks/dashboard/tasks_by_order/`
+
+Returns tasks organized by order for warehouse workers.
+
+**Response:**
+```json
+{
+  "orders_with_tasks": [
+    {
+      "order_info": {
+        "id": 45,
+        "order_number": "OOX000045",
+        "customer_name": "John Doe",
+        "delivery_deadline": "2024-12-25",
+        "urgency": "high"
+      },
+      "tasks": [
+        {
+          "id": 123,
+          "title": "Cutting - Order OOX000045",
+          "task_type": "Cutting",
+          "status": "assigned",
+          "is_running": false,
+          "can_start": true,
+          "can_pause": false,
+          "can_complete": false
+        }
+      ]
+    }
+  ]
+}
+```
+
 ## 📋 Task Management Endpoints
 
 ### 1. Get My Tasks (Worker View)
@@ -292,6 +462,244 @@ export const useWarehouseDashboard = (userRole) => {
 };
 ```
 
+### Order-Task Assignment Component
+```javascript
+const OrderTaskAssignment = ({ orderId }) => {
+  const [orderDetails, setOrderDetails] = useState(null);
+  const [availableWorkers, setAvailableWorkers] = useState([]);
+  const [taskTypes, setTaskTypes] = useState([]);
+  const [tasksToAssign, setTasksToAssign] = useState([]);
+
+  useEffect(() => {
+    fetchOrderDetails();
+    fetchAssignmentData();
+  }, [orderId]);
+
+  const fetchOrderDetails = async () => {
+    const token = localStorage.getItem('access_token');
+    const response = await fetch(`${API_BASE_URL}/api/orders/${orderId}/order_details_for_tasks/`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (response.ok) {
+      const data = await response.json();
+      setOrderDetails(data);
+    }
+  };
+
+  const assignTasksToOrder = async () => {
+    const token = localStorage.getItem('access_token');
+    const response = await fetch(`${API_BASE_URL}/api/orders/${orderId}/assign_tasks_to_order/`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ tasks: tasksToAssign }),
+    });
+    
+    if (response.ok) {
+      const result = await response.json();
+      console.log('Tasks assigned:', result);
+      // Refresh order details
+      fetchOrderDetails();
+    }
+  };
+
+  const addTask = () => {
+    setTasksToAssign([...tasksToAssign, {
+      task_type_id: '',
+      assigned_to_id: '',
+      title: '',
+      priority: 'normal',
+      due_date: ''
+    }]);
+  };
+
+  return (
+    <div className="order-task-assignment">
+      {orderDetails && (
+        <>
+          <div className="order-header">
+            <h2>{orderDetails.order.order_number}</h2>
+            <p>Customer: {orderDetails.order.customer_name}</p>
+            <p>Deadline: {orderDetails.order.delivery_deadline}</p>
+          </div>
+          
+          <div className="existing-tasks">
+            <h3>Existing Tasks ({orderDetails.task_summary.total_tasks})</h3>
+            {orderDetails.existing_tasks.map(task => (
+              <div key={task.id} className="task-item">
+                <span>{task.title}</span>
+                <span>Assigned to: {task.assigned_to}</span>
+                <span className={`status ${task.status}`}>{task.status}</span>
+              </div>
+            ))}
+          </div>
+          
+          <div className="new-tasks">
+            <h3>Assign New Tasks</h3>
+            {tasksToAssign.map((task, index) => (
+              <div key={index} className="task-form">
+                <select 
+                  value={task.task_type_id}
+                  onChange={(e) => {
+                    const updated = [...tasksToAssign];
+                    updated[index].task_type_id = e.target.value;
+                    setTasksToAssign(updated);
+                  }}
+                >
+                  <option value="">Select Task Type</option>
+                  {taskTypes.map(type => (
+                    <option key={type.id} value={type.id}>{type.name}</option>
+                  ))}
+                </select>
+                
+                <select 
+                  value={task.assigned_to_id}
+                  onChange={(e) => {
+                    const updated = [...tasksToAssign];
+                    updated[index].assigned_to_id = e.target.value;
+                    setTasksToAssign(updated);
+                  }}
+                >
+                  <option value="">Select Worker</option>
+                  {availableWorkers.map(worker => (
+                    <option key={worker.id} value={worker.id}>
+                      {worker.name} ({worker.active_tasks_count} active)
+                    </option>
+                  ))}
+                </select>
+                
+                <input 
+                  type="text"
+                  placeholder="Task title"
+                  value={task.title}
+                  onChange={(e) => {
+                    const updated = [...tasksToAssign];
+                    updated[index].title = e.target.value;
+                    setTasksToAssign(updated);
+                  }}
+                />
+              </div>
+            ))}
+            
+            <button onClick={addTask}>Add Task</button>
+            <button onClick={assignTasksToOrder}>Assign All Tasks</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+```
+
+### Worker Order-Task View Component
+```javascript
+const WorkerOrderTasks = () => {
+  const [ordersWithTasks, setOrdersWithTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchTasksByOrder();
+  }, []);
+
+  const fetchTasksByOrder = async () => {
+    const token = localStorage.getItem('access_token');
+    const response = await fetch(`${API_BASE_URL}/api/tasks/dashboard/tasks_by_order/`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      setOrdersWithTasks(data.orders_with_tasks);
+    }
+    setLoading(false);
+  };
+
+  const handleTaskAction = async (taskId, action) => {
+    const token = localStorage.getItem('access_token');
+    const response = await fetch(`${API_BASE_URL}/api/tasks/tasks/${taskId}/action/`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ action }),
+    });
+    
+    if (response.ok) {
+      // Refresh the tasks
+      fetchTasksByOrder();
+    }
+  };
+
+  if (loading) return <div>Loading...</div>;
+
+  return (
+    <div className="worker-order-tasks">
+      <h2>My Tasks by Order</h2>
+      
+      {ordersWithTasks.map(orderGroup => (
+        <div key={orderGroup.order_info.id} className="order-group">
+          <div className={`order-header ${orderGroup.order_info.urgency}`}>
+            <h3>{orderGroup.order_info.order_number}</h3>
+            <p>Customer: {orderGroup.order_info.customer_name}</p>
+            <p>Deadline: {orderGroup.order_info.delivery_deadline}</p>
+            <span className={`urgency-badge ${orderGroup.order_info.urgency}`}>
+              {orderGroup.order_info.urgency.toUpperCase()}
+            </span>
+          </div>
+          
+          <div className="tasks-list">
+            {orderGroup.tasks.map(task => (
+              <div key={task.id} className={`task-card ${task.status}`}>
+                <div className="task-info">
+                  <h4>{task.title}</h4>
+                  <p>Type: {task.task_type}</p>
+                  <p>Status: {task.status}</p>
+                  {task.is_running && (
+                    <p className="time-elapsed">
+                      Time: {task.time_elapsed_formatted}
+                    </p>
+                  )}
+                </div>
+                
+                <div className="task-actions">
+                  {task.can_start && (
+                    <button 
+                      onClick={() => handleTaskAction(task.id, 'start')}
+                      className="btn-start"
+                    >
+                      Start
+                    </button>
+                  )}
+                  {task.can_pause && (
+                    <button 
+                      onClick={() => handleTaskAction(task.id, 'pause')}
+                      className="btn-pause"
+                    >
+                      Pause
+                    </button>
+                  )}
+                  {task.can_complete && (
+                    <button 
+                      onClick={() => handleTaskAction(task.id, 'complete')}
+                      className="btn-complete"
+                    >
+                      Complete
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+```
+
 ### Task Action Handler
 ```javascript
 export const handleTaskAction = async (taskId, action, reason = '') => {
@@ -413,8 +821,15 @@ const useRealTimeUpdates = (interval = 30000) => {
 - **Components**: TaskOverview, WorkerStatus, TaskApproval, RecentActivities
 - **API**: `/api/tasks/dashboard/supervisor_dashboard/`
 
-### 3. Task Management Views
-- **My Tasks**: `/my-tasks` - Worker's task list with start/pause/complete actions
+### 3. Order-Task Management Views (NEW)
+- **Orders for Today**: `/orders-today` - Orders ready for warehouse processing
+- **Order Task Assignment**: `/orders/:id/assign-tasks` - Assign multiple tasks to an order
+- **Worker Order View**: `/my-orders` - Worker's tasks organized by order
+- **Order Progress**: `/orders/:id/progress` - Track task completion for specific order
+
+### 4. Task Management Views
+- **My Tasks**: `/my-tasks` - Worker's task list with start/pause/complete actions  
+- **My Tasks by Order**: `/my-tasks-by-order` - Tasks grouped by order (RECOMMENDED)
 - **Task Assignment**: `/assign-tasks` - Supervisor interface for assigning tasks
 - **Task Details**: `/tasks/:id` - Detailed task view with notes and time tracking
 

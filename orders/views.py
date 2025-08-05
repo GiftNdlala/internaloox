@@ -275,6 +275,228 @@ class OrderViewSet(viewsets.ModelViewSet):
         
         return Response({'error': 'delivery_user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
+    @action(detail=False, methods=['get'])
+    def warehouse_orders(self, request):
+        """Get orders ready for warehouse processing"""
+        # Orders that are paid and ready for production
+        warehouse_orders = self.get_queryset().filter(
+            order_status__in=['deposit_paid', 'order_ready'],
+            production_status__in=['not_started', 'cutting', 'sewing', 'finishing', 'quality_check']
+        ).select_related('customer').prefetch_related('items__product', 'tasks')
+        
+        # Organize by priority/urgency
+        today = timezone.now().date()
+        
+        orders_data = []
+        for order in warehouse_orders:
+            # Calculate estimated completion date based on tasks
+            total_estimated_time = timedelta(0)
+            assigned_tasks = order.tasks.all()
+            
+            for task in assigned_tasks:
+                total_estimated_time += task.estimated_duration
+            
+            # Determine urgency
+            days_until_deadline = (order.delivery_deadline - today).days if order.delivery_deadline else 999
+            urgency = 'low'
+            if days_until_deadline <= 2:
+                urgency = 'critical'
+            elif days_until_deadline <= 5:
+                urgency = 'high'
+            elif days_until_deadline <= 10:
+                urgency = 'medium'
+            
+            # Count tasks by status
+            task_counts = {
+                'total': assigned_tasks.count(),
+                'not_started': assigned_tasks.filter(status='assigned').count(),
+                'in_progress': assigned_tasks.filter(status='started').count(),
+                'completed': assigned_tasks.filter(status__in=['completed', 'approved']).count(),
+            }
+            
+            orders_data.append({
+                'id': order.id,
+                'order_number': order.order_number,
+                'customer_name': order.customer.name if order.customer else order.customer_name,
+                'order_status': order.order_status,
+                'production_status': order.production_status,
+                'delivery_deadline': order.delivery_deadline,
+                'days_until_deadline': days_until_deadline,
+                'urgency': urgency,
+                'total_amount': float(order.total_amount),
+                'estimated_completion_time': str(total_estimated_time),
+                'task_counts': task_counts,
+                'items_count': order.items.count(),
+                'created_at': order.created_at,
+                'is_priority_order': order.is_priority_order
+            })
+        
+        # Sort by urgency and deadline
+        urgency_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+        orders_data.sort(key=lambda x: (urgency_order[x['urgency']], x['days_until_deadline']))
+        
+        return Response({
+            'orders': orders_data,
+            'summary': {
+                'total_orders': len(orders_data),
+                'critical': len([o for o in orders_data if o['urgency'] == 'critical']),
+                'high': len([o for o in orders_data if o['urgency'] == 'high']),
+                'medium': len([o for o in orders_data if o['urgency'] == 'medium']),
+                'low': len([o for o in orders_data if o['urgency'] == 'low']),
+            }
+        })
+    
+    @action(detail=True, methods=['get'])
+    def order_details_for_tasks(self, request, pk=None):
+        """Get detailed order information for task assignment"""
+        order = self.get_object()
+        
+        # Get order items with product details
+        items_data = []
+        for item in order.items.all():
+            # Get required materials for this product
+            required_materials = []
+            if hasattr(item.product, 'required_materials'):
+                for pm in item.product.required_materials.all():
+                    required_materials.append({
+                        'material_id': pm.material.id,
+                        'material_name': pm.material.name,
+                        'quantity_required': float(pm.quantity_required),
+                        'unit': pm.material.get_unit_display(),
+                        'total_needed': float(pm.quantity_required * item.quantity)
+                    })
+            
+            items_data.append({
+                'id': item.id,
+                'product_name': item.product.product_name,
+                'quantity': item.quantity,
+                'unit_price': float(item.unit_price),
+                'fabric_letter': item.assigned_fabric_letter,
+                'color_code': item.assigned_color_code,
+                'fabric_name': item.fabric_name,
+                'color_name': item.color_name,
+                'required_materials': required_materials
+            })
+        
+        # Get existing tasks for this order
+        existing_tasks = order.tasks.select_related('assigned_to', 'task_type').all()
+        tasks_data = []
+        for task in existing_tasks:
+            tasks_data.append({
+                'id': task.id,
+                'title': task.title,
+                'task_type': task.task_type.name,
+                'assigned_to': task.assigned_to.get_full_name() or task.assigned_to.username,
+                'assigned_to_id': task.assigned_to.id,
+                'status': task.status,
+                'priority': task.priority,
+                'estimated_duration': str(task.estimated_duration),
+                'created_at': task.created_at
+            })
+        
+        return Response({
+            'order': {
+                'id': order.id,
+                'order_number': order.order_number,
+                'customer_name': order.customer.name if order.customer else order.customer_name,
+                'order_status': order.order_status,
+                'production_status': order.production_status,
+                'delivery_deadline': order.delivery_deadline,
+                'total_amount': float(order.total_amount),
+                'created_at': order.created_at,
+                'admin_notes': order.admin_notes,
+                'warehouse_notes': order.warehouse_notes,
+            },
+            'items': items_data,
+            'existing_tasks': tasks_data,
+            'task_summary': {
+                'total_tasks': len(tasks_data),
+                'completed': len([t for t in tasks_data if t['status'] in ['completed', 'approved']]),
+                'in_progress': len([t for t in tasks_data if t['status'] == 'started']),
+                'pending': len([t for t in tasks_data if t['status'] == 'assigned'])
+            }
+        })
+    
+    @action(detail=True, methods=['post'])
+    def assign_tasks_to_order(self, request, pk=None):
+        """Assign multiple tasks to an order"""
+        order = self.get_object()
+        tasks_data = request.data.get('tasks', [])
+        
+        if not tasks_data:
+            return Response({'error': 'No tasks provided'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        created_tasks = []
+        errors = []
+        
+        for task_data in tasks_data:
+            try:
+                from users.models import User
+                from tasks.models import TaskType, Task
+                
+                # Get required data
+                assigned_to = User.objects.get(id=task_data['assigned_to_id'], role='warehouse')
+                task_type = TaskType.objects.get(id=task_data['task_type_id'])
+                
+                # Create the task
+                task = Task.objects.create(
+                    title=task_data.get('title', f"{task_type.name} - {order.order_number}"),
+                    description=task_data.get('description', f"{task_type.name} for order {order.order_number}"),
+                    task_type=task_type,
+                    assigned_to=assigned_to,
+                    assigned_by=request.user,
+                    order=order,
+                    order_item_id=task_data.get('order_item_id'),  # Optional: specific item
+                    priority=task_data.get('priority', 'normal'),
+                    due_date=task_data.get('due_date'),
+                    estimated_duration=timedelta(minutes=task_type.estimated_duration_minutes)
+                )
+                
+                # If materials are specified, create task materials
+                if 'required_materials' in task_data:
+                    from tasks.models import TaskMaterial
+                    from inventory.models import Material
+                    
+                    for material_data in task_data['required_materials']:
+                        material = Material.objects.get(id=material_data['material_id'])
+                        TaskMaterial.objects.create(
+                            task=task,
+                            material=material,
+                            quantity_needed=material_data['quantity_needed']
+                        )
+                
+                created_tasks.append({
+                    'task_id': task.id,
+                    'title': task.title,
+                    'assigned_to': assigned_to.get_full_name() or assigned_to.username,
+                    'task_type': task_type.name,
+                    'status': 'created'
+                })
+                
+            except (User.DoesNotExist, TaskType.DoesNotExist) as e:
+                errors.append({
+                    'task_data': task_data,
+                    'error': str(e)
+                })
+            except Exception as e:
+                errors.append({
+                    'task_data': task_data,
+                    'error': f'Unexpected error: {str(e)}'
+                })
+        
+        # Update order production status if tasks were created
+        if created_tasks and order.production_status == 'not_started':
+            order.production_status = 'cutting'  # or appropriate first stage
+            order.save()
+        
+        return Response({
+            'message': f'{len(created_tasks)} tasks created successfully',
+            'created_tasks': created_tasks,
+            'errors': errors,
+            'order_id': order.id,
+            'order_number': order.order_number
+        })
+
 class PaymentProofViewSet(viewsets.ModelViewSet):
     queryset = PaymentProof.objects.all()
     serializer_class = PaymentProofSerializer

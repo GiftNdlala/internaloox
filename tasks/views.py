@@ -776,3 +776,194 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
             updates['stock_alerts'] = StockAlertSerializer(new_alerts, many=True).data
         
         return Response(updates)
+    
+    @action(detail=False, methods=['get'])
+    def orders_with_tasks(self, request):
+        """Get orders organized by task status for warehouse management"""
+        from orders.models import Order
+        
+        # Get orders that are in warehouse processing
+        warehouse_orders = Order.objects.filter(
+            order_status__in=['deposit_paid', 'order_ready'],
+            production_status__in=['not_started', 'cutting', 'sewing', 'finishing', 'quality_check']
+        ).select_related('customer').prefetch_related('tasks__assigned_to', 'tasks__task_type')
+        
+        orders_by_status = {
+            'no_tasks': [],
+            'in_progress': [],
+            'completed': [],
+            'mixed_status': []
+        }
+        
+        for order in warehouse_orders:
+            tasks = order.tasks.all()
+            
+            if not tasks.exists():
+                # Orders without tasks assigned
+                orders_by_status['no_tasks'].append({
+                    'id': order.id,
+                    'order_number': order.order_number,
+                    'customer_name': order.customer.name if order.customer else order.customer_name,
+                    'delivery_deadline': order.delivery_deadline,
+                    'urgency': self._calculate_urgency(order),
+                    'items_count': order.items.count(),
+                    'total_amount': float(order.total_amount),
+                    'tasks': []
+                })
+            else:
+                # Orders with tasks
+                task_statuses = list(tasks.values_list('status', flat=True))
+                completed_statuses = ['completed', 'approved']
+                in_progress_statuses = ['started']
+                
+                tasks_data = []
+                for task in tasks:
+                    tasks_data.append({
+                        'id': task.id,
+                        'title': task.title,
+                        'task_type': task.task_type.name,
+                        'assigned_to': task.assigned_to.get_full_name() or task.assigned_to.username,
+                        'assigned_to_id': task.assigned_to.id,
+                        'status': task.status,
+                        'priority': task.priority,
+                        'is_running': task.is_running,
+                        'time_elapsed_formatted': self._format_duration(task.time_elapsed),
+                        'estimated_duration': str(task.estimated_duration)
+                    })
+                
+                order_data = {
+                    'id': order.id,
+                    'order_number': order.order_number,
+                    'customer_name': order.customer.name if order.customer else order.customer_name,
+                    'delivery_deadline': order.delivery_deadline,
+                    'urgency': self._calculate_urgency(order),
+                    'items_count': order.items.count(),
+                    'total_amount': float(order.total_amount),
+                    'tasks': tasks_data,
+                    'task_summary': {
+                        'total': len(tasks_data),
+                        'completed': len([t for t in tasks_data if t['status'] in completed_statuses]),
+                        'in_progress': len([t for t in tasks_data if t['status'] in in_progress_statuses]),
+                        'pending': len([t for t in tasks_data if t['status'] == 'assigned'])
+                    }
+                }
+                
+                # Categorize based on task completion
+                if all(status in completed_statuses for status in task_statuses):
+                    orders_by_status['completed'].append(order_data)
+                elif any(status in in_progress_statuses for status in task_statuses):
+                    orders_by_status['in_progress'].append(order_data)
+                else:
+                    orders_by_status['mixed_status'].append(order_data)
+        
+        # Sort each category by urgency
+        for category in orders_by_status.values():
+            category.sort(key=lambda x: (
+                0 if x['urgency'] == 'critical' else
+                1 if x['urgency'] == 'high' else
+                2 if x['urgency'] == 'medium' else 3
+            ))
+        
+        return Response({
+            'orders_by_status': orders_by_status,
+            'summary': {
+                'no_tasks': len(orders_by_status['no_tasks']),
+                'in_progress': len(orders_by_status['in_progress']),
+                'completed': len(orders_by_status['completed']),
+                'mixed_status': len(orders_by_status['mixed_status']),
+                'total_orders': sum(len(orders) for orders in orders_by_status.values())
+            }
+        })
+    
+    @action(detail=False, methods=['get'])
+    def tasks_by_order(self, request):
+        """Get tasks organized by order for worker view"""
+        user = request.user
+        
+        # Get tasks assigned to current user (if warehouse worker)
+        if user.role == 'warehouse':
+            tasks = Task.objects.filter(assigned_to=user)
+        else:
+            tasks = Task.objects.all()
+        
+        tasks = tasks.select_related('order', 'task_type', 'assigned_to').order_by('order__delivery_deadline', 'created_at')
+        
+        # Group tasks by order
+        tasks_by_order = {}
+        for task in tasks:
+            order_key = task.order.order_number if task.order else 'No Order'
+            
+            if order_key not in tasks_by_order:
+                tasks_by_order[order_key] = {
+                    'order_info': {
+                        'id': task.order.id if task.order else None,
+                        'order_number': task.order.order_number if task.order else 'No Order',
+                        'customer_name': (task.order.customer.name if task.order.customer else task.order.customer_name) if task.order else 'N/A',
+                        'delivery_deadline': task.order.delivery_deadline if task.order else None,
+                        'urgency': self._calculate_urgency(task.order) if task.order else 'low'
+                    },
+                    'tasks': []
+                }
+            
+            tasks_by_order[order_key]['tasks'].append({
+                'id': task.id,
+                'title': task.title,
+                'task_type': task.task_type.name,
+                'assigned_to': task.assigned_to.get_full_name() or task.assigned_to.username,
+                'status': task.status,
+                'priority': task.priority,
+                'is_running': task.is_running,
+                'is_overdue': task.is_overdue,
+                'time_elapsed_formatted': self._format_duration(task.time_elapsed),
+                'total_time_formatted': self._format_duration(task.total_time_spent),
+                'due_date': task.due_date,
+                'created_at': task.created_at,
+                'can_start': task.status == 'assigned',
+                'can_pause': task.status == 'started',
+                'can_complete': task.status in ['started', 'paused']
+            })
+        
+        # Convert to list and sort by urgency
+        orders_list = list(tasks_by_order.values())
+        orders_list.sort(key=lambda x: (
+            0 if x['order_info']['urgency'] == 'critical' else
+            1 if x['order_info']['urgency'] == 'high' else
+            2 if x['order_info']['urgency'] == 'medium' else 3,
+            x['order_info']['delivery_deadline'] or timezone.now().date() + timedelta(days=999)
+        ))
+        
+        return Response({
+            'orders_with_tasks': orders_list,
+            'summary': {
+                'total_orders': len(orders_list),
+                'total_tasks': sum(len(order['tasks']) for order in orders_list),
+                'active_tasks': sum(len([t for t in order['tasks'] if t['is_running']]) for order in orders_list)
+            }
+        })
+    
+    def _calculate_urgency(self, order):
+        """Helper method to calculate order urgency"""
+        if not order or not order.delivery_deadline:
+            return 'low'
+        
+        today = timezone.now().date()
+        days_until_deadline = (order.delivery_deadline - today).days
+        
+        if days_until_deadline <= 2:
+            return 'critical'
+        elif days_until_deadline <= 5:
+            return 'high'
+        elif days_until_deadline <= 10:
+            return 'medium'
+        else:
+            return 'low'
+    
+    def _format_duration(self, duration):
+        """Helper method to format duration"""
+        if not duration:
+            return "0h 0m"
+        
+        total_seconds = int(duration.total_seconds())
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        return f"{hours}h {minutes}m"
