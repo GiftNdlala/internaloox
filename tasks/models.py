@@ -39,7 +39,7 @@ class TaskTemplate(models.Model):
     estimated_duration = models.IntegerField(help_text="Duration in minutes")
     instructions = models.TextField(blank=True)
     materials_needed = models.TextField(blank=True)
-    created_by = models.ForeignKey(User, on_delete=models.CASCADE)
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     
