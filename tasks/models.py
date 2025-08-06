@@ -29,14 +29,14 @@ class TaskTemplate(models.Model):
     """Pre-defined task templates for common workflows"""
     name = models.CharField(max_length=100)
     description = models.TextField()
-    task_type = models.ForeignKey(TaskType, on_delete=models.CASCADE)
+    task_type = models.ForeignKey(TaskType, on_delete=models.CASCADE, null=True, blank=True)
     priority = models.CharField(max_length=20, choices=[
         ('low', 'Low'),
         ('normal', 'Normal'),
         ('high', 'High'),
         ('urgent', 'Urgent'),
     ], default='normal')
-    estimated_duration = models.IntegerField(help_text="Duration in minutes")
+    estimated_duration = models.IntegerField(help_text="Duration in minutes", default=60)
     instructions = models.TextField(blank=True)
     materials_needed = models.TextField(blank=True)
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
