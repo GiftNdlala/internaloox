@@ -1,6 +1,7 @@
 from django.contrib.auth import authenticate, login, logout
 from django.shortcuts import render
 from django.http import JsonResponse
+from django.db.models import Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -423,4 +424,36 @@ def create_admin_user(request):
         })
         
     except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500) 
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def warehouse_workers(request):
+    """Get list of warehouse workers for task assignment dropdown"""
+    try:
+        # Get all warehouse workers (both new and legacy roles)
+        workers = User.objects.filter(
+            Q(role='warehouse_worker') | Q(role='warehouse'),
+            is_active=True
+        ).order_by('first_name', 'last_name')
+        
+        workers_data = []
+        for worker in workers:
+            workers_data.append({
+                'id': worker.id,
+                'username': worker.username,
+                'first_name': worker.first_name,
+                'last_name': worker.last_name,
+                'full_name': worker.get_full_name() or worker.username,
+                'email': worker.email,
+                'role': worker.role,
+                'employee_id': getattr(worker, 'employee_id', None),
+                'can_manage_tasks': worker.can_manage_tasks,
+                'is_active': worker.is_active
+            })
+        
+        return Response(workers_data)
+        
+    except Exception as e:
+        return Response({'error': str(e)}, status=500) 

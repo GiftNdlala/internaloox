@@ -418,7 +418,8 @@ class OrderViewSet(viewsets.ModelViewSet):
                 'task_counts': task_counts,
                 'items_count': order.items.count(),
                 'created_at': order.created_at,
-                'is_priority_order': order.is_priority_order
+                'is_priority_order': order.is_priority_order,
+                'can_create_tasks': True  # Frontend expects this field
             })
         
         # Sort by urgency and deadline
