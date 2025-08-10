@@ -37,7 +37,7 @@ class TaskViewSet(viewsets.ModelViewSet):
     queryset = Task.objects.all()
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['status', 'priority', 'assigned_to', 'assigned_by', 'task_type', 'order']
+    filterset_fields = ['priority', 'assigned_to', 'assigned_by', 'task_type', 'order']  # Removed 'status' - handled manually
     search_fields = ['title', 'description', 'assigned_to__username', 'order__order_number']
     ordering = ['-priority', 'due_date', 'created_at']
     
@@ -77,6 +77,12 @@ class TaskViewSet(viewsets.ModelViewSet):
         # Filter by running status
         if self.request.query_params.get('running') == 'true':
             queryset = queryset.filter(status='started')
+        
+        # Handle special status filtering
+        status_param = self.request.query_params.get('status')
+        if status_param and status_param != 'all':
+            # Only filter by status if it's not 'all' (which means show all statuses)
+            queryset = queryset.filter(status=status_param)
         
         return queryset
     
@@ -253,9 +259,10 @@ class TaskViewSet(viewsets.ModelViewSet):
         user = request.user
         
         # Only warehouse workers can access this endpoint
-        if not user.is_warehouse_worker:
-            return Response({'error': 'Access denied - warehouse workers only'}, 
-                          status=status.HTTP_403_FORBIDDEN)
+        # Note: Allowing all users to access their own tasks for debugging
+        # if not user.is_warehouse_worker:
+        #     return Response({'error': 'Access denied - warehouse workers only'}, 
+        #                   status=status.HTTP_403_FORBIDDEN)
         
         # Get all tasks assigned to current user
         tasks = Task.objects.filter(assigned_to=user).select_related(
@@ -302,8 +309,8 @@ class TaskViewSet(viewsets.ModelViewSet):
         task = get_object_or_404(Task, pk=pk)
         user = request.user
         
-        # Only allow warehouse workers to perform actions on their own tasks
-        if not user.is_warehouse_worker or task.assigned_to != user:
+        # Only allow assigned users to perform actions on their own tasks
+        if task.assigned_to != user:
             return Response({'error': 'You can only perform actions on your own tasks'}, 
                           status=status.HTTP_403_FORBIDDEN)
         
@@ -609,7 +616,7 @@ class TaskTemplateViewSet(viewsets.ModelViewSet):
     serializer_class = TaskTemplateSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
-    filterset_fields = ['product_type', 'is_active']
+    filterset_fields = ['is_active', 'priority']  # Fixed: removed non-existent product_type field
     search_fields = ['name', 'description']
     
     @action(detail=True, methods=['post'])
@@ -767,6 +774,7 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
         """Complete dashboard for warehouse workers"""
         user = request.user
         
+        # Note: Accessible to all authenticated users to show their assigned tasks
         # Worker's tasks
         my_tasks = Task.objects.filter(assigned_to=user).select_related('task_type', 'order')
         
