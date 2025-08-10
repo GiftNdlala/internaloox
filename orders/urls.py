@@ -19,4 +19,7 @@ router.register(r'order-items', views.OrderItemViewSet)
 urlpatterns = [
     path('', include(router.urls)),
     path('dashboard-stats/', views.dashboard_stats, name='dashboard_stats'),
+    # Frontend-aligned endpoints
+    path('orders/warehouse_orders/', views.OrderViewSet.as_view({'get': 'warehouse_orders'}), name='warehouse_orders'),
+    path('orders/<int:pk>/create_task/', views.OrderViewSet.as_view({'post': 'create_task'}), name='order_create_task'),
 ] 

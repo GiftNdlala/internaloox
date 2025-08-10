@@ -1128,6 +1128,26 @@ class NotificationViewSet(viewsets.ModelViewSet):
         
         return NotificationSerializer
     
+    def list(self, request, *args, **kwargs):
+        notifications = self.get_queryset()[:20]
+        data = [
+            {
+                'id': n.id,
+                'message': n.message,
+                'type': n.type,
+                'priority': n.priority,
+                'is_read': n.is_read,
+                'created_at': n.created_at.isoformat(),
+                'task': {
+                    'id': n.task.id,
+                    'title': n.task.title,
+                    'order_number': n.task.order.order_number if n.task and n.task.order else None,
+                } if n.task else None
+            }
+            for n in notifications
+        ]
+        return Response(data)
+    
     @action(detail=False, methods=['post'])
     def mark_all_read(self, request):
         """Mark all notifications as read for current user"""
