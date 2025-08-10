@@ -952,7 +952,8 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
                         'order_number': task.order.order_number if task.order else 'No Order',
                         'customer_name': (task.order.customer.name if task.order.customer else task.order.customer_name) if task.order else 'N/A',
                         'delivery_deadline': task.order.delivery_deadline if task.order else None,
-                        'urgency': self._calculate_urgency(task.order) if task.order else 'low'
+                        'urgency': self._calculate_urgency(task.order) if task.order else 'low',
+                        'total_amount': float(task.order.total_amount) if task.order and task.order.total_amount is not None else 0.0,
                     },
                     'tasks': []
                 }
@@ -1127,6 +1128,26 @@ class NotificationViewSet(viewsets.ModelViewSet):
                 read_only_fields = ['id', 'created_at']
         
         return NotificationSerializer
+    
+    def list(self, request, *args, **kwargs):
+        notifications = self.get_queryset()[:20]
+        data = [
+            {
+                'id': n.id,
+                'message': n.message,
+                'type': n.type,
+                'priority': n.priority,
+                'is_read': n.is_read,
+                'created_at': n.created_at.isoformat(),
+                'task': {
+                    'id': n.task.id,
+                    'title': n.task.title,
+                    'order_number': n.task.order.order_number if n.task and n.task.order else None,
+                } if n.task else None
+            }
+            for n in notifications
+        ]
+        return Response(data)
     
     @action(detail=False, methods=['post'])
     def mark_all_read(self, request):

@@ -169,11 +169,21 @@ class OrderViewSet(viewsets.ModelViewSet):
                 order=order
             )
             
-            # Serialize and return task data
-            serializer = TaskSerializer(task)
+            # Return exact structure expected by frontend
             return Response({
                 'message': 'Task created successfully',
-                'task': serializer.data
+                'task': {
+                    'id': task.id,
+                    'title': task.title,
+                    'task_type': task.task_type.name,
+                    'assigned_to': assigned_worker.get_full_name() or assigned_worker.username,
+                    'status': task.status,
+                    'priority': task.priority,
+                    'order': order.id,
+                    'order_number': order.order_number,
+                    'deadline': (task.deadline or task.due_date).isoformat() if (task.deadline or task.due_date) else None,
+                    'created_at': task.created_at.isoformat(),
+                }
             }, status=status.HTTP_201_CREATED)
             
         except TaskType.DoesNotExist:

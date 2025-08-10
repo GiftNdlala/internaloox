@@ -140,85 +140,30 @@ class Task(models.Model):
     def is_running(self):
         """Check if task is currently running (started but not completed)"""
         return self.status == 'started' and self.is_timer_running
-
-
-class Notification(models.Model):
-    """System notifications for users"""
-    PRIORITY_CHOICES = [
-        ('low', 'Low'),
-        ('normal', 'Normal'),
-        ('high', 'High'),
-        ('critical', 'Critical'),
-    ]
     
-    TYPE_CHOICES = [
-        ('info', 'Information'),
-        ('success', 'Success'),
-        ('warning', 'Warning'),
-        ('error', 'Error'),
-        ('task_assigned', 'Task Assigned'),
-        ('task_completed', 'Task Completed'),
-        ('task_overdue', 'Task Overdue'),
-        ('stock_alert', 'Stock Alert'),
-    ]
-    
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
-    message = models.TextField()
-    type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='info')
-    priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='normal')
-    is_read = models.BooleanField(default=False)
-    
-    # Optional links to related objects
-    task = models.ForeignKey(Task, on_delete=models.CASCADE, null=True, blank=True)
-    order = models.ForeignKey('orders.Order', on_delete=models.CASCADE, null=True, blank=True)
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    read_at = models.DateTimeField(null=True, blank=True)
-    
-    class Meta:
-        ordering = ['-created_at']
-    
-    def __str__(self):
-        return f"{self.user.username} - {self.message[:50]}..."
-    
-    def mark_as_read(self):
-        """Mark notification as read"""
-        if not self.is_read:
-            self.is_read = True
-            self.read_at = timezone.now()
-            self.save()
-
-
-def create_notification(user, message, notification_type='info', priority='normal', task=None, order=None):
-    """Helper function to create notifications"""
-    return Notification.objects.create(
-        user=user,
-        message=message,
-        type=notification_type,
-        priority=priority,
-        task=task,
-        order=order
-    )
-    
-    def start_task(self):
+    # Added: properly scoped task state transition methods within Task class
+    def start_task(self) -> bool:
         """Start the task and begin time tracking"""
         if self.status == 'assigned':
             self.status = 'started'
-            self.actual_start_time = timezone.now()
+            if not self.actual_start_time:
+                self.actual_start_time = timezone.now()
+            self.is_timer_running = True
             self.save()
             
             # Create time session
             TaskTimeSession.objects.create(
                 task=self,
-                started_at=self.actual_start_time
+                started_at=timezone.now()
             )
             return True
         return False
     
-    def pause_task(self, reason=""):
+    def pause_task(self, reason: str = "") -> bool:
         """Pause the task and stop time tracking"""
         if self.status == 'started':
             self.status = 'paused'
+            self.is_timer_running = False
             current_time = timezone.now()
             
             # End current time session
@@ -230,6 +175,7 @@ def create_notification(user, message, notification_type='info', priority='norma
                 # Update total time spent
                 session_duration = current_session.ended_at - current_session.started_at
                 self.total_time_spent += session_duration
+                self.time_elapsed_seconds = int(self.total_time_spent.total_seconds())
             
             self.save()
             
@@ -243,10 +189,11 @@ def create_notification(user, message, notification_type='info', priority='norma
             return True
         return False
     
-    def resume_task(self):
+    def resume_task(self) -> bool:
         """Resume a paused task"""
         if self.status == 'paused':
             self.status = 'started'
+            self.is_timer_running = True
             current_time = timezone.now()
             self.save()
             
@@ -326,8 +273,66 @@ def create_notification(user, message, notification_type='info', priority='norma
             )
             return True
         return False
+    
+
+class Notification(models.Model):
+    """System notifications for users"""
+    PRIORITY_CHOICES = [
+        ('low', 'Low'),
+        ('normal', 'Normal'),
+        ('high', 'High'),
+        ('critical', 'Critical'),
+    ]
+    
+    TYPE_CHOICES = [
+        ('info', 'Information'),
+        ('success', 'Success'),
+        ('warning', 'Warning'),
+        ('error', 'Error'),
+        ('task_assigned', 'Task Assigned'),
+        ('task_completed', 'Task Completed'),
+        ('task_overdue', 'Task Overdue'),
+        ('stock_alert', 'Stock Alert'),
+    ]
+    
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    message = models.TextField()
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='info')
+    priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='normal')
+    is_read = models.BooleanField(default=False)
+    
+    # Optional links to related objects
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, null=True, blank=True)
+    order = models.ForeignKey('orders.Order', on_delete=models.CASCADE, null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.message[:50]}..."
+    
+    def mark_as_read(self):
+        """Mark notification as read"""
+        if not self.is_read:
+            self.is_read = True
+            self.read_at = timezone.now()
+            self.save()
 
 
+def create_notification(user, message, notification_type='info', priority='normal', task=None, order=None):
+    """Helper function to create notifications"""
+    return Notification.objects.create(
+        user=user,
+        message=message,
+        type=notification_type,
+        priority=priority,
+        task=task,
+        order=order
+    )
+    
 class TaskTimeSession(models.Model):
     """Track individual work sessions for a task"""
     task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='time_sessions')
