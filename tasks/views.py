@@ -161,10 +161,11 @@ class TaskViewSet(viewsets.ModelViewSet):
     
     def _can_approve_task(self, user, task):
         """Check if user can approve/reject a task"""
-        # Owner, admin, and the person who assigned the task can approve
-        return (user.role in ['owner', 'admin'] or 
+        # Owner, admin, warehouse managers, and the person who assigned the task can approve
+        return (user.role in ['owner', 'admin', 'warehouse_manager'] or 
                 user == task.assigned_by or
-                (user.role == 'warehouse' and task.assigned_to.role == 'warehouse'))
+                (user.role in ['warehouse_manager', 'warehouse'] and 
+                 task.assigned_to.role in ['warehouse_worker', 'warehouse']))
     
     @action(detail=False, methods=['post'])
     def bulk_assign(self, request):
@@ -245,8 +246,192 @@ class TaskViewSet(viewsets.ModelViewSet):
                 'message': f'{updated_count} tasks assigned successfully',
                 'assigned_count': updated_count
             })
+    
+    @action(detail=False, methods=['get'])
+    def my_tasks(self, request):
+        """Get tasks for current warehouse worker - optimized for worker dashboard"""
+        user = request.user
+        
+        # Only warehouse workers can access this endpoint
+        if not user.is_warehouse_worker:
+            return Response({'error': 'Access denied - warehouse workers only'}, 
+                          status=status.HTTP_403_FORBIDDEN)
+        
+        # Get all tasks assigned to current user
+        tasks = Task.objects.filter(assigned_to=user).select_related(
+            'task_type', 'order', 'assigned_by'
+        ).prefetch_related('notes', 'time_sessions')
+        
+        # Categorize tasks by status
+        assigned_tasks = tasks.filter(status='assigned').order_by('due_date', 'priority')
+        active_tasks = tasks.filter(status__in=['started', 'paused']).order_by('-updated_at')
+        completed_tasks = tasks.filter(status__in=['completed', 'approved']).order_by('-completed_at')[:10]
+        
+        # Calculate summary stats
+        total_assigned = tasks.filter(status='assigned').count()
+        total_active = tasks.filter(status__in=['started', 'paused']).count()
+        total_completed_today = tasks.filter(
+            status__in=['completed', 'approved'],
+            completed_at__date=timezone.now().date()
+        ).count()
+        
+        # Currently running task
+        running_task = tasks.filter(status='started', is_timer_running=True).first()
+        
+        return Response({
+            'summary': {
+                'assigned_count': total_assigned,
+                'active_count': total_active,
+                'completed_today': total_completed_today,
+                'currently_running': TaskListSerializer(running_task).data if running_task else None
+            },
+            'assigned_tasks': TaskListSerializer(assigned_tasks, many=True).data,
+            'active_tasks': TaskListSerializer(active_tasks, many=True).data,
+            'completed_tasks': TaskListSerializer(completed_tasks, many=True).data,
+            'worker_info': {
+                'name': user.get_full_name() or user.username,
+                'employee_id': getattr(user, 'employee_id', None),
+                'shift_start': getattr(user, 'shift_start', None),
+                'shift_end': getattr(user, 'shift_end', None)
+                         }
+         })
+    
+    @action(detail=True, methods=['post'])
+    def worker_action(self, request, pk=None):
+        """Warehouse worker specific task actions with enhanced feedback"""
+        task = get_object_or_404(Task, pk=pk)
+        user = request.user
+        
+        # Only allow warehouse workers to perform actions on their own tasks
+        if not user.is_warehouse_worker or task.assigned_to != user:
+            return Response({'error': 'You can only perform actions on your own tasks'}, 
+                          status=status.HTTP_403_FORBIDDEN)
+        
+        action_type = request.data.get('action')
+        reason = request.data.get('reason', '')
+        
+        if not action_type:
+            return Response({'error': 'Action type is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Perform the action
+        success = False
+        message = ''
+        
+        if action_type == 'start':
+            # Check if worker has another task running
+            running_task = Task.objects.filter(
+                assigned_to=user, 
+                status='started', 
+                is_timer_running=True
+            ).exclude(id=task.id).first()
             
-        except User.DoesNotExist:
+            if running_task:
+                return Response({
+                    'error': f'You have another task running: {running_task.title}. Please pause it first.',
+                    'running_task': {
+                        'id': running_task.id,
+                        'title': running_task.title,
+                        'time_elapsed': running_task.time_elapsed_seconds
+                    }
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            success = task.start_task()
+            message = 'Task started successfully. Timer is now running.'
+            
+        elif action_type == 'pause':
+            success = task.pause_task(reason)
+            message = 'Task paused successfully. Timer stopped.'
+            
+        elif action_type == 'resume':
+            # Check if worker has another task running
+            running_task = Task.objects.filter(
+                assigned_to=user, 
+                status='started', 
+                is_timer_running=True
+            ).first()
+            
+            if running_task:
+                return Response({
+                    'error': f'You have another task running: {running_task.title}. Please pause it first.',
+                    'running_task': {
+                        'id': running_task.id,
+                        'title': running_task.title,
+                        'time_elapsed': running_task.time_elapsed_seconds
+                    }
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            success = task.resume_task()
+            message = 'Task resumed successfully. Timer is now running.'
+            
+        elif action_type == 'complete':
+            success = task.complete_task()
+            message = 'Task completed successfully! Your supervisor has been notified.'
+            
+        elif action_type == 'flag':
+            # Flag task for supervisor attention
+            TaskNote.objects.create(
+                task=task,
+                user=user,
+                note_type='flag',
+                content=f"Task flagged by worker. Reason: {reason}" if reason else "Task flagged by worker."
+            )
+            
+            # Create notification for supervisor
+            from tasks.models import TaskNotification
+            TaskNotification.objects.create(
+                task=task,
+                recipient=task.assigned_by,
+                notification_type='task_flagged',
+                message=f"Task '{task.title}' has been flagged by {user.get_full_name() or user.username}. Reason: {reason}"
+            )
+            
+            success = True
+            message = 'Task flagged for supervisor attention.'
+            
+        else:
+            return Response({'error': f'Invalid action: {action_type}'}, 
+                          status=status.HTTP_400_BAD_REQUEST)
+        
+        if success:
+            # Get updated task state
+            task.refresh_from_db()
+            
+            # Get worker's current active tasks count
+            active_tasks_count = Task.objects.filter(
+                assigned_to=user,
+                status__in=['assigned', 'started', 'paused']
+            ).count()
+            
+            return Response({
+                'message': message,
+                'task': {
+                    'id': task.id,
+                    'title': task.title,
+                    'status': task.status,
+                    'is_running': task.is_timer_running,
+                    'time_elapsed': task.time_elapsed_seconds,
+                    'progress_percentage': task.progress_percentage,
+                    'can_start': task.status == 'assigned',
+                    'can_pause': task.status == 'started',
+                    'can_resume': task.status == 'paused',
+                    'can_complete': task.status in ['started', 'paused'],
+                    'estimated_duration_minutes': int(task.estimated_duration.total_seconds() / 60) if task.estimated_duration else 0,
+                    'due_date': task.due_date.isoformat() if task.due_date else None
+                },
+                'worker_summary': {
+                    'active_tasks_count': active_tasks_count,
+                    'has_running_task': Task.objects.filter(
+                        assigned_to=user, 
+                        status='started', 
+                        is_timer_running=True
+                    ).exists()
+                }
+            })
+        else:
+            return Response({'error': f'Cannot {action_type} task in current state'}, 
+                          status=status.HTTP_400_BAD_REQUEST)
+             
+         except User.DoesNotExist:
             return Response({'error': 'Worker not found'}, status=status.HTTP_404_NOT_FOUND)
     
     @action(detail=False, methods=['get'])
@@ -255,7 +440,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         user = request.user
         
         # Base queryset depends on user role
-        if user.role == 'warehouse':
+        if user.role in ['warehouse_worker', 'warehouse']:
             base_queryset = Task.objects.filter(assigned_to=user)
         else:
             base_queryset = Task.objects.all()
@@ -275,8 +460,10 @@ class TaskViewSet(viewsets.ModelViewSet):
         
         # Worker summaries (only for supervisors)
         worker_summaries = []
-        if user.role in ['owner', 'admin', 'warehouse']:
-            warehouse_users = User.objects.filter(role='warehouse')
+        if user.role in ['owner', 'admin', 'warehouse_manager', 'warehouse']:
+            warehouse_users = User.objects.filter(
+                Q(role='warehouse_worker') | Q(role='warehouse')
+            )
             for worker in warehouse_users:
                 worker_tasks = Task.objects.filter(assigned_to=worker)
                 total_assigned = worker_tasks.count()
@@ -336,7 +523,7 @@ class TaskTimeSessionViewSet(viewsets.ReadOnlyModelViewSet):
         queryset = TaskTimeSession.objects.select_related('task')
         
         # If user is warehouse worker, only show their sessions
-        if self.request.user.role == 'warehouse':
+        if self.request.user.role in ['warehouse_worker', 'warehouse']:
             queryset = queryset.filter(task__assigned_to=self.request.user)
         
         return queryset
@@ -355,7 +542,7 @@ class TaskNoteViewSet(viewsets.ModelViewSet):
         queryset = TaskNote.objects.select_related('task', 'user')
         
         # If user is warehouse worker, only show notes for their tasks
-        if self.request.user.role == 'warehouse':
+        if self.request.user.role in ['warehouse_worker', 'warehouse']:
             queryset = queryset.filter(task__assigned_to=self.request.user)
         
         return queryset
@@ -480,7 +667,7 @@ class WorkerProductivityViewSet(viewsets.ReadOnlyModelViewSet):
         queryset = WorkerProductivity.objects.select_related('worker')
         
         # If user is warehouse worker, only show their own productivity
-        if self.request.user.role == 'warehouse':
+        if self.request.user.role in ['warehouse_worker', 'warehouse']:
             queryset = queryset.filter(worker=self.request.user)
         
         return queryset
@@ -494,7 +681,9 @@ class WorkerProductivityViewSet(viewsets.ReadOnlyModelViewSet):
         else:
             target_date = timezone.datetime.strptime(target_date, '%Y-%m-%d').date()
         
-        warehouse_users = User.objects.filter(role='warehouse')
+        warehouse_users = User.objects.filter(
+            Q(role='warehouse_worker') | Q(role='warehouse')
+        )
         calculated_count = 0
         
         for worker in warehouse_users:
@@ -641,7 +830,7 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
         user = request.user
         
         # Only supervisors can access
-        if user.role not in ['owner', 'admin', 'warehouse']:
+        if user.role not in ['owner', 'admin', 'warehouse_manager', 'warehouse']:
             return Response({'error': 'Access denied'}, status=status.HTTP_403_FORBIDDEN)
         
         # All warehouse workers
@@ -770,7 +959,10 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
         order_id = request.data.get('order_id')
         
         try:
-            assigned_to = User.objects.get(id=assigned_to_id, role='warehouse')
+            assigned_to = User.objects.get(
+                id=assigned_to_id, 
+                role__in=['warehouse_worker', 'warehouse']
+            )
             task_type = TaskType.objects.get(id=task_type_id)
             
             task = Task.objects.create(
@@ -820,14 +1012,14 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
         updates['new_notifications'] = TaskNotificationSerializer(new_notifications, many=True).data
         
         # Task updates (for supervisors)
-        if user.role in ['owner', 'admin', 'warehouse']:
+        if user.role in ['owner', 'admin', 'warehouse_manager', 'warehouse']:
             updated_tasks = Task.objects.filter(
                 updated_at__gt=last_check
             ).select_related('assigned_to', 'task_type')
             updates['task_updates'] = TaskListSerializer(updated_tasks, many=True).data
         
         # Stock alerts (if user has inventory access)
-        if user.role in ['owner', 'admin', 'warehouse']:
+        if user.role in ['owner', 'admin', 'warehouse_manager', 'warehouse']:
             from inventory.models import StockAlert
             new_alerts = StockAlert.objects.filter(
                 status='active',
