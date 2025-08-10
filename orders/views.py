@@ -4,7 +4,7 @@ import traceback
 from django.http import JsonResponse
 from rest_framework import status, viewsets, filters
 from rest_framework.decorators import api_view, permission_classes, action
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated, IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
@@ -17,6 +17,7 @@ from .serializers import (
     ProductSerializer, ColorSerializer, FabricSerializer, OrderItemSerializer,
     ColorReferenceSerializer, FabricReferenceSerializer
 )
+from .permissions import CanCreateProducts
 
 class CustomerViewSet(viewsets.ModelViewSet):
     queryset = Customer.objects.all()
@@ -629,7 +630,7 @@ class OrderHistoryViewSet(viewsets.ReadOnlyModelViewSet):
 class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.all()
     serializer_class = ProductSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticatedOrReadOnly, CanCreateProducts]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['product_name', 'name', 'description', 'model_code']
     ordering_fields = ['created_at', 'product_name', 'unit_price', 'stock']

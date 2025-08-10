@@ -210,9 +210,122 @@ class OrderStatusUpdateSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data) 
 
 class ProductSerializer(serializers.ModelSerializer):
+    # Write-only fields from frontend contract
+    price = serializers.DecimalField(max_digits=10, decimal_places=2, write_only=True, required=False)
+    currency = serializers.CharField(write_only=True, required=False, default='ZAR')
+    color = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    fabric = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    sku = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    attributes = serializers.JSONField(required=False)
+
+    # Make model-required fields optional at serializer layer
+    product_type = serializers.CharField(required=False)
+    product_name = serializers.CharField(required=False)
+    default_fabric_letter = serializers.CharField(required=False)
+    default_color_code = serializers.CharField(required=False)
+    unit_cost = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
+    unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
+    estimated_build_time = serializers.IntegerField(required=False)
+
+    # Read-only aliased fields in responses
+    created_at = serializers.DateTimeField(read_only=True)
+
     class Meta:
         model = Product
-        fields = '__all__' 
+        fields = '__all__'
+
+    def validate(self, attrs):
+        # Map name to product_name
+        name = attrs.get('name') or attrs.get('product_name') or self.initial_data.get('name')
+        if name:
+            attrs['product_name'] = name
+            attrs['name'] = name
+        # Unit price from price
+        if 'price' in self.initial_data and self.initial_data.get('price') not in [None, ""]:
+            attrs['unit_price'] = Decimal(str(self.initial_data.get('price')))
+        elif 'unit_price' in attrs and attrs['unit_price'] is not None:
+            attrs['unit_price'] = Decimal(str(attrs['unit_price']))
+        # Defaults for required fields
+        attrs.setdefault('product_type', 'single')
+        attrs.setdefault('unit_cost', Decimal('0'))
+        attrs.setdefault('estimated_build_time', 1)
+        fabric_name = self.initial_data.get('fabric') or attrs.get('fabric') or ''
+        attrs.setdefault('default_fabric_letter', (fabric_name[:1].upper() if fabric_name else 'A'))
+        attrs.setdefault('default_color_code', '01')
+        # Model code from sku
+        sku_value = self.initial_data.get('sku') or attrs.get('sku')
+        if sku_value:
+            attrs['model_code'] = sku_value
+        # Attributes passthrough
+        if 'attributes' in self.initial_data and isinstance(self.initial_data.get('attributes'), dict):
+            attrs['attributes'] = self.initial_data.get('attributes')
+        return attrs
+
+    def create(self, validated_data):
+        # Extract write-only contract fields
+        price = Decimal(str(validated_data.pop('price', validated_data.get('unit_price', 0) or 0)))
+        currency = validated_data.pop('currency', 'ZAR')
+        color_name = validated_data.pop('color', '').strip() if 'color' in validated_data else (self.initial_data.get('color', '').strip() if hasattr(self, 'initial_data') else '')
+        fabric_name = validated_data.pop('fabric', '').strip() if 'fabric' in validated_data else (self.initial_data.get('fabric', '').strip() if hasattr(self, 'initial_data') else '')
+        sku = validated_data.pop('sku', '').strip() if 'sku' in validated_data else (self.initial_data.get('sku', '').strip() if hasattr(self, 'initial_data') else '')
+        attributes = validated_data.pop('attributes', validated_data.get('attributes', None))
+
+        # Ensure final mappings already handled in validate; just enforce unit_price
+        validated_data['unit_price'] = price
+        if sku and not validated_data.get('model_code'):
+            validated_data['model_code'] = sku
+        if attributes is not None:
+            validated_data['attributes'] = attributes
+
+        # Create product
+        product = super().create(validated_data)
+
+        # Persist color/fabric as options (legacy simple storage)
+        if color_name:
+            Color.objects.get_or_create(name=color_name)
+            from .models import ProductOption
+            ProductOption.objects.create(product=product, option_type='color', value=color_name)
+        if fabric_name:
+            Fabric.objects.get_or_create(name=fabric_name)
+            from .models import ProductOption
+            ProductOption.objects.create(product=product, option_type='fabric', value=fabric_name)
+
+        # Attach currency and echo fields for response
+        self._response_currency = currency
+        self._response_color = color_name
+        self._response_fabric = fabric_name
+        self._response_sku = sku
+        self._response_price = price
+        self._response_attributes = attributes
+        return product
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Map fields back to frontend contract
+        data.setdefault('name', instance.product_name or instance.name)
+        data['price'] = str(self._response_price) if hasattr(self, '_response_price') else str(instance.unit_price or instance.base_price or 0)
+        data['currency'] = getattr(self, '_response_currency', 'ZAR')
+        # sku alias
+        data['sku'] = getattr(self, '_response_sku', instance.model_code or '')
+        # attributes
+        data['attributes'] = instance.attributes or getattr(self, '_response_attributes', {}) or {}
+        # Try fetch options for color/fabric
+        color_value = getattr(self, '_response_color', None)
+        fabric_value = getattr(self, '_response_fabric', None)
+        try:
+            if not color_value:
+                opt = instance.options.filter(option_type='color').first()
+                color_value = opt.value if opt else None
+            if not fabric_value:
+                opt = instance.options.filter(option_type='fabric').first()
+                fabric_value = opt.value if opt else None
+        except Exception:
+            pass
+        if color_value:
+            data['color'] = color_value
+        if fabric_value:
+            data['fabric'] = fabric_value
+        return data
 
 class ColorSerializer(serializers.ModelSerializer):
     class Meta:

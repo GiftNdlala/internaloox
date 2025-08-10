@@ -44,6 +44,7 @@ class Product(models.Model):
     estimated_build_time = models.IntegerField()
     is_active = models.BooleanField(default=True)
     date_added = models.DateTimeField(blank=True, null=True)
+    attributes = models.JSONField(null=True, blank=True, default=dict)
     
     class Meta:
         db_table = 'orders_product'

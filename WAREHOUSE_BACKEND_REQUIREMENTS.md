@@ -565,6 +565,27 @@ The warehouse dashboard will **immediately** become:
 
 ---
 
+## Add Product API Alignment (Confirmation)
+
+- Endpoint: `POST /api/products/`
+- Auth: JWT Bearer; role required in `{'owner','admin','warehouse_manager','warehouse'}` for create. Reads remain open.
+- Request body accepted (labels or nulls):
+  - `name` (string, required)
+  - `sku` (string, optional) → stored as `model_code`
+  - `description` (string, optional)
+  - `price` (number, required) → stored as `unit_price`
+  - `currency` (string, optional, default `ZAR`) → echoed back in response
+  - `color` (string label, optional)
+  - `fabric` (string label, optional)
+  - `attributes` (object map, optional) → persisted in `Product.attributes` JSONField
+- Response: `201 Created` with created product, including `name`, `sku`, `price`, `currency`, `color`, `fabric`, `attributes`, `created_at`.
+- Errors: `400` for validation with `{error: string}` or field errors. Permission errors `403` when role/auth missing.
+- Reference data endpoints available:
+  - `GET /api/colors/`
+  - `GET /api/fabrics/`
+
+This aligns with the frontend Add Product contract and is production-ready.
+
 *Backend Requirements Document*  
 *Updated: December 16, 2024*  
 *Status: 🚨 URGENT - FRONTEND DEPLOYED, WAITING FOR BACKEND*  
