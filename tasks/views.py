@@ -58,6 +58,15 @@ class TaskViewSet(viewsets.ModelViewSet):
         if user.is_warehouse_worker and not user.can_manage_tasks:
             queryset = queryset.filter(assigned_to=user)
         
+        # Support assigned_worker filtering from query params
+        assigned_worker_id = self.request.query_params.get('assigned_worker')
+        if assigned_worker_id:
+            try:
+                assigned_worker_id = int(assigned_worker_id)
+                queryset = queryset.filter(assigned_to_id=assigned_worker_id)
+            except (ValueError, TypeError):
+                pass  # Invalid assigned_worker parameter, ignore
+        
         # Filter by overdue status
         if self.request.query_params.get('overdue') == 'true':
             queryset = queryset.filter(
@@ -937,6 +946,15 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
             tasks = Task.objects.filter(assigned_to=user)
         else:
             tasks = Task.objects.all()
+        
+        # Support assigned_worker filtering from query params
+        assigned_worker_id = request.query_params.get('assigned_worker')
+        if assigned_worker_id:
+            try:
+                assigned_worker_id = int(assigned_worker_id)
+                tasks = tasks.filter(assigned_to_id=assigned_worker_id)
+            except (ValueError, TypeError):
+                pass  # Invalid assigned_worker parameter, ignore
         
         tasks = tasks.select_related('order', 'task_type', 'assigned_to').order_by('order__delivery_deadline', 'created_at')
         

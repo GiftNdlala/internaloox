@@ -432,11 +432,28 @@ def create_admin_user(request):
 def warehouse_workers(request):
     """Get list of warehouse workers for task assignment dropdown"""
     try:
-        # Get all warehouse workers (both new and legacy roles)
-        workers = User.objects.filter(
-            Q(role='warehouse_worker') | Q(role='warehouse') | Q(role='warehouse_manager'),
-            is_active=True
-        ).order_by('first_name', 'last_name')
+        # Support role filtering via query parameter
+        role_filter = request.GET.get('role')
+        
+        if role_filter:
+            # Filter by specific role (warehouse_worker, warehouse_manager, delivery)
+            if role_filter == 'warehouse_worker':
+                workers = User.objects.filter(role='warehouse_worker', is_active=True)
+            elif role_filter == 'warehouse_manager':
+                workers = User.objects.filter(role='warehouse_manager', is_active=True)
+            elif role_filter == 'delivery':
+                workers = User.objects.filter(role='delivery', is_active=True)
+            else:
+                # Invalid role filter
+                return Response({'error': f'Invalid role filter: {role_filter}'}, status=400)
+        else:
+            # Get all warehouse workers (both new and legacy roles)
+            workers = User.objects.filter(
+                Q(role='warehouse_worker') | Q(role='warehouse') | Q(role='warehouse_manager'),
+                is_active=True
+            )
+        
+        workers = workers.order_by('first_name', 'last_name')
         
         workers_data = []
         for worker in workers:
@@ -454,6 +471,70 @@ def warehouse_workers(request):
             })
         
         return Response(workers_data)
+        
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def users_list(request):
+    """Enhanced users list with role filtering and permissions"""
+    try:
+        user = request.user
+        role_filter = request.GET.get('role')
+        
+        # Check permissions based on user role
+        if user.role == 'owner':
+            # Owner can see all users
+            base_queryset = User.objects.all()
+        elif user.role == 'admin':
+            # Admin can see all except owners
+            base_queryset = User.objects.exclude(role='owner')
+        elif user.role == 'warehouse_manager':
+            # Warehouse manager can see warehouse workers only
+            base_queryset = User.objects.filter(
+                Q(role='warehouse_worker') | Q(role='warehouse')
+            )
+        else:
+            # Others can only see themselves
+            base_queryset = User.objects.filter(id=user.id)
+        
+        # Apply role filter if provided
+        if role_filter:
+            if role_filter in ['warehouse_worker', 'warehouse_manager', 'warehouse', 'delivery', 'admin', 'owner']:
+                base_queryset = base_queryset.filter(role=role_filter)
+            else:
+                return Response({'error': f'Invalid role filter: {role_filter}'}, status=400)
+        
+        users = base_queryset.filter(is_active=True).order_by('first_name', 'last_name')
+        
+        users_data = []
+        for u in users:
+            users_data.append({
+                'id': u.id,
+                'username': u.username,
+                'first_name': u.first_name,
+                'last_name': u.last_name,
+                'full_name': u.get_full_name() or u.username,
+                'email': u.email,
+                'role': u.role,
+                'role_display': u.get_role_display(),
+                'employee_id': getattr(u, 'employee_id', None),
+                'can_manage_tasks': u.can_manage_tasks,
+                'is_active': u.is_active,
+                'date_joined': u.date_joined
+            })
+        
+        return Response({
+            'users': users_data,
+            'count': len(users_data),
+            'role_filter': role_filter,
+            'user_permissions': {
+                'can_create_users': user.role == 'owner',
+                'can_manage_warehouse_workers': user.role in ['owner', 'admin', 'warehouse_manager']
+            }
+        })
         
     except Exception as e:
         return Response({'error': str(e)}, status=500) 

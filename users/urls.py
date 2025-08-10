@@ -17,4 +17,5 @@ urlpatterns = [
     path('create/', views.CreateUserView.as_view(), name='create_user'),  # NEW SECURE ENDPOINT
     path('create-admin/', views.create_admin_user, name='create_admin_user'),  # DEPRECATED
     path('warehouse_workers/', views.warehouse_workers, name='warehouse_workers'),  # FRONTEND NEEDS THIS
+    path('users/', views.users_list, name='users_list'),  # Enhanced users list with role filtering
 ] 
