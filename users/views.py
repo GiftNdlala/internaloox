@@ -32,16 +32,27 @@ def user_has_role_permission(user, requested_role):
     if user_role == 'owner':
         return True
     
-    # Users can access their own role or lower in hierarchy
-    role_hierarchy = ['delivery', 'warehouse', 'admin', 'owner']
+    # Define role hierarchy (from lowest to highest privilege)
+    # Lower index = lower privilege
+    role_hierarchy = {
+        'delivery': 0,
+        'warehouse': 1,
+        'warehouse_worker': 1,  # Same level as legacy warehouse
+        'warehouse_manager': 2,
+        'admin': 3,
+        'owner': 4
+    }
     
-    try:
-        user_level = role_hierarchy.index(user_role)
-        requested_level = role_hierarchy.index(requested_role)
-        return user_level >= requested_level
-    except ValueError:
-        # Invalid role
+    # Get role levels
+    user_level = role_hierarchy.get(user_role, -1)
+    requested_level = role_hierarchy.get(requested_role, -1)
+    
+    # Invalid roles
+    if user_level == -1 or requested_level == -1:
         return False
+    
+    # Users can access their own role level and below
+    return user_level >= requested_level
 
 @method_decorator(csrf_exempt, name='dispatch')
 class LoginView(APIView):
@@ -140,12 +151,22 @@ class UserPermissionsView(APIView):
         available_roles = []
         
         # Check which roles the user can access based on hierarchy
-        roles_to_check = ['delivery', 'warehouse', 'admin', 'owner']
+        roles_to_check = ['delivery', 'warehouse', 'warehouse_worker', 'warehouse_manager', 'admin', 'owner']
         for role in roles_to_check:
             if user_has_role_permission(user, role):
+                # Map role names to display labels
+                role_labels = {
+                    'delivery': 'Delivery',
+                    'warehouse': 'Warehouse (Legacy)',
+                    'warehouse_worker': 'Warehouse Worker',
+                    'warehouse_manager': 'Warehouse Manager',
+                    'admin': 'Admin',
+                    'owner': 'Owner'
+                }
+                
                 available_roles.append({
                     'value': role,
-                    'label': role.title(),
+                    'label': role_labels.get(role, role.title()),
                     'can_access': True
                 })
         
@@ -155,7 +176,9 @@ class UserPermissionsView(APIView):
             'permissions': {
                 'can_access_owner': user_has_role_permission(user, 'owner'),
                 'can_access_admin': user_has_role_permission(user, 'admin'),
+                'can_access_warehouse_manager': user_has_role_permission(user, 'warehouse_manager'),
                 'can_access_warehouse': user_has_role_permission(user, 'warehouse'),
+                'can_access_warehouse_worker': user_has_role_permission(user, 'warehouse_worker'),
                 'can_access_delivery': user_has_role_permission(user, 'delivery'),
             },
             'access_system': 'hierarchical',
@@ -175,6 +198,24 @@ class UserViewSet(viewsets.ModelViewSet):
         # Order by date_joined for consistent pagination
         queryset = User.objects.all().order_by('-date_joined')
         
+        # Role-based filtering for frontend dropdown population
+        role_filter = self.request.query_params.get('role')
+        if role_filter:
+            # Support both exact role matches and role categories
+            if role_filter == 'warehouse_worker':
+                queryset = queryset.filter(Q(role='warehouse_worker') | Q(role='warehouse'))
+            elif role_filter == 'warehouse_manager':
+                queryset = queryset.filter(role='warehouse_manager')
+            elif role_filter == 'delivery':
+                queryset = queryset.filter(role='delivery')
+            elif role_filter == 'admin':
+                queryset = queryset.filter(role='admin')
+            elif role_filter == 'owner':
+                queryset = queryset.filter(role='owner')
+            else:
+                # Direct role match for any other role
+                queryset = queryset.filter(role=role_filter)
+        
         # Filter based on user role permissions
         if self.request.user.is_owner:
             return queryset  # Owners can see all users
@@ -184,11 +225,32 @@ class UserViewSet(viewsets.ModelViewSet):
             return queryset.filter(id=self.request.user.id)  # Others can only see themselves
 
     def create(self, request, *args, **kwargs):
-        if not request.user.is_owner:
+        # Get the role the user wants to create
+        requested_role = request.data.get('role', 'warehouse_worker')
+        
+        # Check role-based creation permissions
+        user_role = request.user.role
+        
+        # Define permission matrix
+        if user_role == 'owner':
+            # Owners can create any role
+            allowed_roles = ['owner', 'admin', 'warehouse_manager', 'warehouse_worker', 'warehouse', 'delivery']
+        elif user_role == 'admin':
+            # Admins can create warehouse_manager, warehouse_worker, and delivery
+            allowed_roles = ['warehouse_manager', 'warehouse_worker', 'warehouse', 'delivery']
+        elif user_role == 'warehouse_manager':
+            # Warehouse managers can only create warehouse_worker
+            allowed_roles = ['warehouse_worker', 'warehouse']
+        else:
+            # Other roles cannot create users
+            allowed_roles = []
+        
+        if requested_role not in allowed_roles:
             return Response({
-                'error': 'Only users with Owner role can create new users',
-                'required_role': 'owner',
-                'your_role': request.user.role
+                'error': f'Permission denied: {user_role} cannot create {requested_role} users',
+                'allowed_roles': allowed_roles,
+                'your_role': user_role,
+                'requested_role': requested_role
             }, status=status.HTTP_403_FORBIDDEN)
         
         serializer = self.get_serializer(data=request.data)
@@ -199,20 +261,41 @@ class UserViewSet(viewsets.ModelViewSet):
         response_serializer = UserSerializer(user)
         return Response({
             'success': True,
-            'message': f'User "{user.username}" created successfully',
+            'message': f'User "{user.username}" created successfully with role "{requested_role}"',
             'user': response_serializer.data
         }, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
-        if not request.user.is_owner:
+        instance = self.get_object()
+        user_role = request.user.role
+        requested_role = request.data.get('role', instance.role)
+        
+        # Check role-based update permissions
+        # Define permission matrix - same as create permissions
+        if user_role == 'owner':
+            # Owners can update any role
+            allowed_roles = ['owner', 'admin', 'warehouse_manager', 'warehouse_worker', 'warehouse', 'delivery']
+        elif user_role == 'admin':
+            # Admins can update warehouse_manager, warehouse_worker, and delivery
+            allowed_roles = ['warehouse_manager', 'warehouse_worker', 'warehouse', 'delivery']
+        elif user_role == 'warehouse_manager':
+            # Warehouse managers can only update warehouse_worker
+            allowed_roles = ['warehouse_worker', 'warehouse']
+        else:
+            # Other roles cannot update users
+            allowed_roles = []
+        
+        # Check if user can update this role
+        if instance.role not in allowed_roles or requested_role not in allowed_roles:
             return Response({
-                'error': 'Only users with Owner role can update users',
-                'required_role': 'owner',
-                'your_role': request.user.role
+                'error': f'Permission denied: {user_role} cannot update {instance.role} users or set role to {requested_role}',
+                'allowed_roles': allowed_roles,
+                'your_role': user_role,
+                'target_user_role': instance.role,
+                'requested_role': requested_role
             }, status=status.HTTP_403_FORBIDDEN)
         
         partial = kwargs.pop('partial', False)
-        instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
@@ -224,20 +307,38 @@ class UserViewSet(viewsets.ModelViewSet):
         })
 
     def destroy(self, request, *args, **kwargs):
-        if not request.user.is_owner:
-            return Response({
-                'error': 'Only users with Owner role can delete users',
-                'required_role': 'owner',
-                'your_role': request.user.role
-            }, status=status.HTTP_403_FORBIDDEN)
-        
         instance = self.get_object()
+        user_role = request.user.role
+        
+        # Check role-based delete permissions
+        # Define permission matrix - same as create/update permissions
+        if user_role == 'owner':
+            # Owners can delete any role
+            allowed_roles = ['owner', 'admin', 'warehouse_manager', 'warehouse_worker', 'warehouse', 'delivery']
+        elif user_role == 'admin':
+            # Admins can delete warehouse_manager, warehouse_worker, and delivery
+            allowed_roles = ['warehouse_manager', 'warehouse_worker', 'warehouse', 'delivery']
+        elif user_role == 'warehouse_manager':
+            # Warehouse managers can only delete warehouse_worker
+            allowed_roles = ['warehouse_worker', 'warehouse']
+        else:
+            # Other roles cannot delete users
+            allowed_roles = []
+        
+        # Check if user can delete this role
+        if instance.role not in allowed_roles:
+            return Response({
+                'error': f'Permission denied: {user_role} cannot delete {instance.role} users',
+                'allowed_roles': allowed_roles,
+                'your_role': user_role,
+                'target_user_role': instance.role
+            }, status=status.HTTP_403_FORBIDDEN)
         
         # Prevent deleting yourself
         if instance.id == request.user.id:
             return Response({
                 'error': 'You cannot delete your own account',
-                'suggestion': 'Ask another owner to delete your account if needed'
+                'suggestion': 'Ask another authorized user to delete your account if needed'
             }, status=status.HTTP_400_BAD_REQUEST)
         
         username = instance.username
@@ -288,19 +389,37 @@ class CreateUserView(APIView):
     
     def post(self, request):
         try:
-            # Check if user has permission to create users
-            if not request.user.is_owner:
+            # Get the role the user wants to create
+            requested_role = request.data.get('role', 'warehouse_worker')
+            user_role = request.user.role
+            
+            # Check role-based creation permissions - use same logic as UserViewSet
+            if user_role == 'owner':
+                # Owners can create any role
+                allowed_roles = ['owner', 'admin', 'warehouse_manager', 'warehouse_worker', 'warehouse', 'delivery']
+            elif user_role == 'admin':
+                # Admins can create warehouse_manager, warehouse_worker, and delivery
+                allowed_roles = ['warehouse_manager', 'warehouse_worker', 'warehouse', 'delivery']
+            elif user_role == 'warehouse_manager':
+                # Warehouse managers can only create warehouse_worker
+                allowed_roles = ['warehouse_worker', 'warehouse']
+            else:
+                # Other roles cannot create users
+                allowed_roles = []
+            
+            if requested_role not in allowed_roles:
                 return Response({
-                    'error': 'Only users with Owner role can create new users',
-                    'required_role': 'owner',
-                    'your_role': request.user.role
+                    'error': f'Permission denied: {user_role} cannot create {requested_role} users',
+                    'allowed_roles': allowed_roles,
+                    'your_role': user_role,
+                    'requested_role': requested_role
                 }, status=status.HTTP_403_FORBIDDEN)
             
             # Get data from request
             username = request.data.get('username')
             email = request.data.get('email')
             password = request.data.get('password')
-            role = request.data.get('role', 'delivery')  # Default to lowest role
+            role = requested_role
             first_name = request.data.get('first_name', '')
             last_name = request.data.get('last_name', '')
             phone = request.data.get('phone', '')
@@ -367,7 +486,9 @@ class CreateUserView(APIView):
                 'permissions': {
                     'can_access_owner': user_has_role_permission(user, 'owner'),
                     'can_access_admin': user_has_role_permission(user, 'admin'),
+                    'can_access_warehouse_manager': user_has_role_permission(user, 'warehouse_manager'),
                     'can_access_warehouse': user_has_role_permission(user, 'warehouse'),
+                    'can_access_warehouse_worker': user_has_role_permission(user, 'warehouse_worker'),
                     'can_access_delivery': user_has_role_permission(user, 'delivery'),
                 }
             }

@@ -58,6 +58,16 @@ class TaskViewSet(viewsets.ModelViewSet):
         if user.is_warehouse_worker and not user.can_manage_tasks:
             queryset = queryset.filter(assigned_to=user)
         
+        # Filter by assigned worker (for task history functionality)
+        assigned_worker = self.request.query_params.get('assigned_worker')
+        if assigned_worker:
+            try:
+                worker_id = int(assigned_worker)
+                queryset = queryset.filter(assigned_to_id=worker_id)
+            except (ValueError, TypeError):
+                # Invalid worker ID, return empty queryset
+                queryset = queryset.none()
+        
         # Filter by overdue status
         if self.request.query_params.get('overdue') == 'true':
             queryset = queryset.filter(
@@ -569,6 +579,10 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
         """Complete dashboard for warehouse workers"""
         user = request.user
         
+        # Only warehouse workers and managers can access this view
+        if not user.is_warehouse:
+            return Response({'error': 'Access denied - Warehouse role required'}, status=status.HTTP_403_FORBIDDEN)
+        
         # Worker's tasks
         my_tasks = Task.objects.filter(assigned_to=user).select_related('task_type', 'order')
         
@@ -576,6 +590,7 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
         total_tasks = my_tasks.count()
         assigned_tasks = my_tasks.filter(status='assigned').count()
         in_progress_tasks = my_tasks.filter(status='started').count()
+        paused_tasks = my_tasks.filter(status='paused').count()
         completed_today = my_tasks.filter(
             status__in=['completed', 'approved'],
             completed_at__date=timezone.now().date()
@@ -587,6 +602,9 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
         
         # Current active task (if any)
         active_task = my_tasks.filter(status='started').first()
+        
+        # Next task to work on (highest priority assigned task)
+        next_task = my_tasks.filter(status='assigned').order_by('-priority', 'due_date', 'created_at').first()
         
         # Recent notifications
         recent_notifications = TaskNotification.objects.filter(
@@ -603,27 +621,67 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
         
         # Time tracking for active task
         active_session = None
+        time_elapsed_today = timedelta(0)
         if active_task:
             active_session = active_task.time_sessions.filter(ended_at__isnull=True).first()
+            # Calculate total time worked today
+            today_sessions = TaskTimeSession.objects.filter(
+                task__assigned_to=user,
+                started_at__date=today
+            )
+            for session in today_sessions:
+                if session.ended_at:
+                    time_elapsed_today += session.duration
+                elif session == active_session:
+                    time_elapsed_today += timezone.now() - session.started_at
+        
+        # Task history (last 10 completed tasks)
+        completed_tasks = my_tasks.filter(
+            status__in=['completed', 'approved']
+        ).order_by('-completed_at')[:10]
+        
+        # Tasks by priority for worker planning
+        urgent_tasks = my_tasks.filter(priority='urgent', status__in=['assigned', 'started', 'paused']).count()
+        high_tasks = my_tasks.filter(priority='high', status__in=['assigned', 'started', 'paused']).count()
         
         return Response({
             'worker_info': {
+                'id': user.id,
                 'name': user.get_full_name() or user.username,
                 'role': user.get_role_display(),
-                'username': user.username
+                'username': user.username,
+                'employee_id': getattr(user, 'employee_id', None),
+                'shift_start': getattr(user, 'shift_start', None),
+                'shift_end': getattr(user, 'shift_end', None)
             },
             'task_summary': {
                 'total_tasks': total_tasks,
                 'assigned': assigned_tasks,
                 'in_progress': in_progress_tasks,
+                'paused': paused_tasks,
                 'completed_today': completed_today,
-                'overdue': overdue_tasks
+                'overdue': overdue_tasks,
+                'urgent_pending': urgent_tasks,
+                'high_pending': high_tasks
             },
             'active_task': TaskSerializer(active_task).data if active_task else None,
+            'next_task': TaskSerializer(next_task).data if next_task else None,
             'active_session': TaskTimeSessionSerializer(active_session).data if active_session else None,
-            'recent_tasks': TaskListSerializer(my_tasks.order_by('-created_at')[:10], many=True).data,
+            'time_tracking': {
+                'time_elapsed_today': str(time_elapsed_today),
+                'time_elapsed_today_formatted': self._format_duration(time_elapsed_today),
+                'is_timer_running': active_task.is_timer_running if active_task else False
+            },
+            'recent_tasks': TaskListSerializer(my_tasks.order_by('-updated_at')[:10], many=True).data,
+            'completed_tasks_history': TaskListSerializer(completed_tasks, many=True).data,
             'notifications': TaskNotificationSerializer(recent_notifications, many=True).data,
-            'today_productivity': WorkerProductivitySerializer(today_productivity).data if today_productivity else None
+            'today_productivity': WorkerProductivitySerializer(today_productivity).data if today_productivity else None,
+            'quick_actions': {
+                'can_start_task': next_task is not None,
+                'can_pause_active': active_task is not None and active_task.status == 'started',
+                'can_resume_paused': my_tasks.filter(status='paused').exists(),
+                'can_complete_active': active_task is not None and active_task.status in ['started', 'paused']
+            }
         })
     
     @action(detail=False, methods=['get'])
@@ -814,7 +872,7 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
         if user.role in ['owner', 'admin', 'warehouse']:
             updated_tasks = Task.objects.filter(
                 updated_at__gt=last_check
-            ).select_related('assigned_to', 'task_type')
+            ).select_related('assigned_to', 'order')
             updates['task_updates'] = TaskListSerializer(updated_tasks, many=True).data
         
         # Stock alerts (if user has inventory access)
@@ -828,6 +886,130 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
             updates['stock_alerts'] = StockAlertSerializer(new_alerts, many=True).data
         
         return Response(updates)
+    
+    @action(detail=False, methods=['post'])
+    def quick_start_next_task(self, request):
+        """Quick start the next assigned task for current worker"""
+        user = request.user
+        
+        if not user.is_warehouse:
+            return Response({'error': 'Access denied - Warehouse role required'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Check if user already has a running task
+        running_task = Task.objects.filter(assigned_to=user, status='started').first()
+        if running_task:
+            return Response({
+                'error': 'You already have a task in progress',
+                'current_task': {
+                    'id': running_task.id,
+                    'title': running_task.title,
+                    'time_elapsed': running_task.time_elapsed_seconds
+                }
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get next task to work on
+        next_task = Task.objects.filter(
+            assigned_to=user,
+            status='assigned'
+        ).order_by('-priority', 'due_date', 'created_at').first()
+        
+        if not next_task:
+            return Response({
+                'error': 'No assigned tasks available to start',
+                'suggestion': 'Check with your supervisor for new task assignments'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Start the task
+        if next_task.start_task():
+            return Response({
+                'message': f'Task "{next_task.title}" started successfully',
+                'task': TaskSerializer(next_task).data,
+                'quick_actions': {
+                    'can_pause': True,
+                    'can_complete': True,
+                    'can_start_next': False
+                }
+            })
+        else:
+            return Response({
+                'error': 'Failed to start task',
+                'task_status': next_task.status
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=False, methods=['post'])
+    def quick_pause_active_task(self, request):
+        """Quick pause the currently active task for current worker"""
+        user = request.user
+        
+        if not user.is_warehouse:
+            return Response({'error': 'Access denied - Warehouse role required'}, status=status.HTTP_403_FORBIDDEN)
+        
+        active_task = Task.objects.filter(assigned_to=user, status='started').first()
+        if not active_task:
+            return Response({
+                'error': 'No active task to pause',
+                'suggestion': 'Start a task first before pausing'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        reason = request.data.get('reason', 'Quick pause from dashboard')
+        
+        if active_task.pause_task(reason):
+            return Response({
+                'message': f'Task "{active_task.title}" paused successfully',
+                'task': TaskSerializer(active_task).data,
+                'quick_actions': {
+                    'can_resume': True,
+                    'can_complete': True,
+                    'can_start_next': True
+                }
+            })
+        else:
+            return Response({
+                'error': 'Failed to pause task',
+                'task_status': active_task.status
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=False, methods=['post'])
+    def quick_complete_active_task(self, request):
+        """Quick complete the currently active task for current worker"""
+        user = request.user
+        
+        if not user.is_warehouse:
+            return Response({'error': 'Access denied - Warehouse role required'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Get active or paused task
+        active_task = Task.objects.filter(
+            assigned_to=user,
+            status__in=['started', 'paused']
+        ).first()
+        
+        if not active_task:
+            return Response({
+                'error': 'No active task to complete',
+                'suggestion': 'Start a task first before completing'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        completion_notes = request.data.get('completion_notes', '')
+        if completion_notes:
+            active_task.completion_notes = completion_notes
+            active_task.save()
+        
+        if active_task.complete_task():
+            return Response({
+                'message': f'Task "{active_task.title}" completed successfully',
+                'task': TaskSerializer(active_task).data,
+                'quick_actions': {
+                    'can_start_next': True,
+                    'can_pause': False,
+                    'can_complete': False
+                },
+                'next_steps': 'Task is now ready for supervisor review'
+            })
+        else:
+            return Response({
+                'error': 'Failed to complete task',
+                'task_status': active_task.status
+            }, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=False, methods=['get'])
     def orders_with_tasks(self, request):
@@ -1091,8 +1273,9 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
         if user.role in ['warehouse_manager', 'admin', 'owner', 'warehouse_worker', 'warehouse']:
             try:
                 from inventory.models import Material
+                from django.db.models import F
                 stock_alerts = Material.objects.filter(
-                    current_stock__lte=models.F('minimum_stock_level')
+                    current_stock__lte=F('minimum_stock_level')
                 )[:10]
                 if stock_alerts.exists():
                     updates['has_updates'] = True
