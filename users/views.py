@@ -434,7 +434,7 @@ def warehouse_workers(request):
     try:
         # Get all warehouse workers (both new and legacy roles)
         workers = User.objects.filter(
-            Q(role='warehouse_worker') | Q(role='warehouse'),
+            Q(role='warehouse_worker') | Q(role='warehouse') | Q(role='warehouse_manager'),
             is_active=True
         ).order_by('first_name', 'last_name')
         

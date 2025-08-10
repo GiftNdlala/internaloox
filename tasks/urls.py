@@ -7,11 +7,12 @@ router.register(r'task-types', views.TaskTypeViewSet)
 router.register(r'tasks', views.TaskViewSet)
 router.register(r'time-sessions', views.TaskTimeSessionViewSet)
 router.register(r'notes', views.TaskNoteViewSet)
-router.register(r'notifications', views.TaskNotificationViewSet)
+router.register(r'task-notifications', views.TaskNotificationViewSet)
 router.register(r'materials', views.TaskMaterialViewSet)
 router.register(r'templates', views.TaskTemplateViewSet)
 router.register(r'productivity', views.WorkerProductivityViewSet)
 router.register(r'dashboard', views.WarehouseDashboardViewSet, basename='warehouse-dashboard')
+router.register(r'notifications', views.NotificationViewSet, basename='notifications')
 
 urlpatterns = [
     path('', include(router.urls)),
