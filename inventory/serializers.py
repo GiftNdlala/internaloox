@@ -24,10 +24,64 @@ class MaterialSerializer(serializers.ModelSerializer):
     total_value = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     is_low_stock = serializers.BooleanField(read_only=True)
     is_critical_stock = serializers.BooleanField(read_only=True)
-    
+    # Aliases expected by frontend
+    unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, write_only=True)
+    category_id = serializers.IntegerField(required=False, write_only=True)
+
     class Meta:
         model = Material
         fields = '__all__'
+
+    def _normalize_unit(self, value: str) -> str:
+        if not value:
+            return value
+        normalized = value.strip().lower()
+        mapping = {
+            'metres': 'meters',
+            'meters': 'meters',
+            'kilograms': 'kg',
+            'kgs': 'kg',
+            'kg': 'kg',
+            'litres': 'liters',
+            'liters': 'liters',
+            'units': 'units',
+            'boards': 'boards',
+            'rolls': 'rolls',
+            'pieces': 'pieces',
+            'inches': 'inches',
+        }
+        return mapping.get(normalized, normalized)
+
+    def validate(self, attrs):
+        initial = getattr(self, 'initial_data', {})
+        # Map unit alias
+        unit_in = initial.get('unit') or attrs.get('unit')
+        if unit_in:
+            attrs['unit'] = self._normalize_unit(unit_in)
+        # Map unit_price -> cost_per_unit
+        if 'unit_price' in initial and initial.get('unit_price') not in [None, '']:
+            attrs['cost_per_unit'] = initial.get('unit_price')
+        # Map category_id -> category
+        if 'category_id' in initial and initial.get('category_id'):
+            attrs['category'] = initial.get('category_id')
+        return super().validate(attrs)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Echo unit_price for frontend using cost_per_unit
+        data['unit_price'] = str(instance.cost_per_unit)
+        # Ensure numeric stock and minimum values are numbers (string fallback safe)
+        if 'current_stock' in data and isinstance(data['current_stock'], str):
+            try:
+                data['current_stock'] = float(data['current_stock'])
+            except Exception:
+                pass
+        if 'minimum_stock' in data and isinstance(data['minimum_stock'], str):
+            try:
+                data['minimum_stock'] = float(data['minimum_stock'])
+            except Exception:
+                pass
+        return data
 
 
 class MaterialListSerializer(serializers.ModelSerializer):
@@ -35,7 +89,7 @@ class MaterialListSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.get_name_display', read_only=True)
     supplier_name = serializers.CharField(source='primary_supplier.name', read_only=True)
     stock_status = serializers.CharField(read_only=True)
-    
+
     class Meta:
         model = Material
         fields = [
@@ -49,16 +103,55 @@ class MaterialListSerializer(serializers.ModelSerializer):
 class StockMovementSerializer(serializers.ModelSerializer):
     material_name = serializers.CharField(source='material.name', read_only=True)
     created_by_username = serializers.CharField(source='created_by.username', read_only=True)
-    
+    # Frontend alias fields
+    direction = serializers.CharField(write_only=True, required=False)
+    note = serializers.CharField(write_only=True, required=False, allow_blank=True)
+
     class Meta:
         model = StockMovement
         fields = '__all__'
         read_only_fields = ['created_by', 'created_at']
-    
+
+    def validate(self, attrs):
+        initial = getattr(self, 'initial_data', {})
+        # Map direction -> movement_type
+        direction = initial.get('direction')
+        if direction:
+            direction = direction.lower().strip()
+            if direction not in ['in', 'out']:
+                raise serializers.ValidationError({'direction': 'Must be "in" or "out"'})
+            attrs['movement_type'] = direction
+        # unit_cost required only for 'in'
+        movement_type = attrs.get('movement_type') or direction
+        if movement_type == 'in':
+            if initial.get('unit_cost') in [None, '', '0'] and not attrs.get('unit_cost'):
+                raise serializers.ValidationError({'unit_cost': 'unit_cost is required for stock-in'})
+        # Map note -> notes
+        if 'note' in initial and initial.get('note') is not None:
+            attrs['notes'] = initial.get('note')
+        return super().validate(attrs)
+
     def create(self, validated_data):
         # Set the created_by field to the current user
         validated_data['created_by'] = self.context['request'].user
         return super().create(validated_data)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Expose direction instead of movement_type
+        data['direction'] = data.get('movement_type')
+        # Prefer note alias (from notes or reason)
+        note_val = data.get('notes') or data.get('reason')
+        if note_val is not None:
+            data['note'] = note_val
+        # For stock-out, present unit_cost as null if zero
+        if data.get('direction') == 'out':
+            try:
+                if float(data.get('unit_cost') or 0) == 0:
+                    data['unit_cost'] = None
+            except Exception:
+                pass
+        return data
 
 
 class ProductMaterialSerializer(serializers.ModelSerializer):
@@ -66,7 +159,7 @@ class ProductMaterialSerializer(serializers.ModelSerializer):
     material_unit = serializers.CharField(source='material.unit', read_only=True)
     product_name = serializers.CharField(source='product.product_name', read_only=True)
     total_cost_per_product = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
-    
+
     class Meta:
         model = ProductMaterial
         fields = '__all__'
@@ -75,7 +168,7 @@ class ProductMaterialSerializer(serializers.ModelSerializer):
 class StockAlertSerializer(serializers.ModelSerializer):
     material_name = serializers.CharField(source='material.name', read_only=True)
     acknowledged_by_username = serializers.CharField(source='acknowledged_by.username', read_only=True)
-    
+
     class Meta:
         model = StockAlert
         fields = '__all__'
@@ -85,7 +178,7 @@ class StockAlertSerializer(serializers.ModelSerializer):
 class MaterialConsumptionPredictionSerializer(serializers.ModelSerializer):
     material_name = serializers.CharField(source='material.name', read_only=True)
     material_unit = serializers.CharField(source='material.unit', read_only=True)
-    
+
     class Meta:
         model = MaterialConsumptionPrediction
         fields = '__all__'
