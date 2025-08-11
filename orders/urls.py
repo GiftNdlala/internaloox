@@ -24,6 +24,9 @@ urlpatterns = [
     path('orders/workflow_dashboard/', views.OrderViewSet.as_view({'get': 'order_workflow_dashboard'}), name='order_workflow_dashboard'),
     path('orders/management_data/', views.OrderViewSet.as_view({'get': 'order_management_data'}), name='order_management_data'),
     path('orders/status_options/', views.OrderViewSet.as_view({'get': 'status_options'}), name='status_options'),
+    # Aliases without the extra 'orders/' segment for frontend compatibility
+    path('management_data/', views.OrderViewSet.as_view({'get': 'order_management_data'}), name='order_management_data_alias'),
+    path('status_options/', views.OrderViewSet.as_view({'get': 'status_options'}), name='status_options_alias'),
     
     # Payment management endpoints
     path('orders/payments_dashboard/', views.OrderViewSet.as_view({'get': 'payments_dashboard'}), name='payments_dashboard'),
