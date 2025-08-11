@@ -1605,7 +1605,7 @@ def dashboard_stats(request):
                 'error': 'Assigned user not found'
             }, status=status.HTTP_404_NOT_FOUND)
     
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='management_data')
     def order_management_data(self, request):
         """Get comprehensive data for order management interface"""
         user = request.user
@@ -1991,7 +1991,7 @@ def dashboard_stats(request):
             'last_updated': timezone.now()
         }) 
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='status_options')
     def status_options(self, request):
         """Expose status dropdown options to frontend consumers."""
         order_statuses = [{'value': choice[0], 'label': choice[1]} for choice in Order.ORDER_STATUS_CHOICES]
