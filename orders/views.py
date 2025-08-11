@@ -1473,6 +1473,9 @@ def dashboard_stats(request):
         order.order_status = next_status
         
         # Handle special workflow logic
+        from django.utils import timezone
+        from datetime import timedelta
+        
         if next_status == 'deposit_paid':
             order.deposit_paid_date = timezone.now()
         elif next_status == 'out_for_delivery':
@@ -1637,4 +1640,343 @@ def dashboard_stats(request):
                 'available_products': products_data
             },
             'user_permissions': self._get_user_workflow_permissions(user)
+        }) 
+
+    @action(detail=True, methods=['patch'])
+    def update_payment(self, request, pk=None):
+        """Update payment information for an order"""
+        order = self.get_object()
+        user = request.user
+        
+        # Check permissions - Owner and Admin can update payments
+        if user.role not in ['owner', 'admin']:
+            return Response({
+                'error': 'Permission denied: Only Owner and Admin can update payments'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Extract payment data
+        total_amount = request.data.get('total_amount')
+        deposit_amount = request.data.get('deposit_amount') 
+        balance_amount = request.data.get('balance_amount')
+        payment_status = request.data.get('payment_status')
+        
+        # Store old values for logging
+        old_values = {
+            'total_amount': order.total_amount,
+            'deposit_amount': order.deposit_amount,
+            'balance_amount': order.balance_amount,
+            'payment_status': order.payment_status
+        }
+        
+        # Update payment fields
+        changes = []
+        if total_amount is not None:
+            order.total_amount = total_amount
+            changes.append(f"Total amount: R{old_values['total_amount']} → R{total_amount}")
+        
+        if deposit_amount is not None:
+            order.deposit_amount = deposit_amount
+            changes.append(f"Deposit amount: R{old_values['deposit_amount']} → R{deposit_amount}")
+        
+        if balance_amount is not None:
+            order.balance_amount = balance_amount
+            changes.append(f"Balance amount: R{old_values['balance_amount']} → R{balance_amount}")
+        
+        if payment_status is not None:
+            order.payment_status = payment_status
+            changes.append(f"Payment status: {old_values['payment_status']} → {payment_status}")
+            
+            # Special handling for deposit paid status
+            if payment_status == 'deposit_paid' and not order.deposit_paid_date:
+                order.deposit_paid_date = timezone.now()
+                order.order_status = 'deposit_paid'
+                changes.append("Activated production queue (deposit paid)")
+        
+        order.save()
+        
+        # Log the payment update
+        if changes:
+            OrderHistory.objects.create(
+                order=order,
+                user=user,
+                action="Payment updated",
+                details="; ".join(changes)
+            )
+        
+        return Response({
+            'message': 'Payment updated successfully',
+            'order_number': order.order_number,
+            'total_amount': order.total_amount,
+            'deposit_amount': order.deposit_amount,
+            'balance_amount': order.balance_amount,
+            'payment_status': order.payment_status,
+            'changes': changes
+        })
+    
+    @action(detail=False, methods=['get'])
+    def payments_dashboard(self, request):
+        """Get payment overview dashboard"""
+        user = request.user
+        
+        # Get all orders visible to user
+        all_orders = self.get_queryset()
+        
+        # Payment statistics
+        from django.db.models import Sum, Count, Q
+        
+        payment_stats = {
+            'total_revenue': all_orders.aggregate(
+                total=Sum('total_amount')
+            )['total'] or 0,
+            
+            'total_deposits': all_orders.aggregate(
+                total=Sum('deposit_amount')
+            )['total'] or 0,
+            
+            'outstanding_balance': all_orders.aggregate(
+                total=Sum('balance_amount')
+            )['total'] or 0,
+            
+            'payment_status_breakdown': {},
+            'overdue_payments': all_orders.filter(
+                payment_status='overdue'
+            ).count(),
+            
+            'pending_deposits': all_orders.filter(
+                payment_status='deposit_pending'
+            ).count(),
+            
+            'fully_paid_orders': all_orders.filter(
+                payment_status='fully_paid'
+            ).count()
+        }
+        
+        # Payment status breakdown
+        for status_choice in Order.PAYMENT_STATUS_CHOICES:
+            status_code = status_choice[0]
+            status_label = status_choice[1]
+            count = all_orders.filter(payment_status=status_code).count()
+            payment_stats['payment_status_breakdown'][status_code] = {
+                'label': status_label,
+                'count': count
+            }
+        
+        # Recent payment activities
+        recent_payments = OrderHistory.objects.filter(
+            order__in=all_orders,
+            action__icontains='payment'
+        ).select_related('order', 'user').order_by('-timestamp')[:15]
+        
+        payment_activities = []
+        for activity in recent_payments:
+            payment_activities.append({
+                'id': activity.id,
+                'order_number': activity.order.order_number,
+                'order_id': activity.order.id,
+                'action': activity.action,
+                'details': activity.details,
+                'user': activity.user.get_full_name() if activity.user else 'System',
+                'timestamp': activity.timestamp
+            })
+        
+        # Orders requiring payment attention
+        attention_orders = []
+        
+        # Overdue payments
+        overdue_orders = all_orders.filter(payment_status='overdue')
+        for order in overdue_orders[:10]:
+            attention_orders.append({
+                'order_id': order.id,
+                'order_number': order.order_number,
+                'customer_name': order.customer.name if order.customer else order.customer_name,
+                'issue': 'Overdue Payment',
+                'amount': order.balance_amount,
+                'days_overdue': (timezone.now().date() - order.delivery_deadline).days
+            })
+        
+        # Large outstanding balances (over R5000)
+        large_balances = all_orders.filter(
+            balance_amount__gt=5000,
+            payment_status__in=['deposit_paid', 'partial']
+        )
+        for order in large_balances[:5]:
+            attention_orders.append({
+                'order_id': order.id,
+                'order_number': order.order_number,
+                'customer_name': order.customer.name if order.customer else order.customer_name,
+                'issue': 'Large Outstanding Balance',
+                'amount': order.balance_amount,
+                'days_outstanding': (timezone.now().date() - order.order_date.date()).days
+            })
+        
+        return Response({
+            'payment_statistics': payment_stats,
+            'recent_activities': payment_activities,
+            'attention_required': attention_orders,
+            'user_permissions': {
+                'can_update_payments': user.role in ['owner', 'admin'],
+                'can_view_all_payments': user.role in ['owner', 'admin'],
+                'can_mark_overdue': user.role in ['owner', 'admin']
+            }
+        })
+    
+    @action(detail=True, methods=['post'])
+    def mark_payment_overdue(self, request, pk=None):
+        """Mark order payment as overdue"""
+        order = self.get_object()
+        user = request.user
+        
+        # Check permissions
+        if user.role not in ['owner', 'admin']:
+            return Response({
+                'error': 'Permission denied: Only Owner and Admin can mark payments overdue'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        old_status = order.payment_status
+        order.payment_status = 'overdue'
+        order.save()
+        
+        # Log the change
+        OrderHistory.objects.create(
+            order=order,
+            user=user,
+            action="Payment marked overdue",
+            details=f"Payment status changed from {old_status} to overdue"
+        )
+        
+        return Response({
+            'message': f'Order #{order.order_number} marked as overdue',
+            'order_number': order.order_number,
+            'previous_status': old_status,
+            'new_status': 'overdue'
+        }) 
+
+    @action(detail=False, methods=['get'])
+    def admin_warehouse_overview(self, request):
+        """Read-only warehouse overview for admin dashboard"""
+        user = request.user
+        
+        # Check permissions - only admin and owner can access
+        if user.role not in ['admin', 'owner']:
+            return Response({
+                'error': 'Permission denied: Only Admin and Owner can view warehouse overview'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Get warehouse-related orders
+        warehouse_orders = self.get_queryset().filter(
+            order_status__in=['deposit_paid', 'order_ready'],
+            production_status__in=['cutting', 'sewing', 'finishing', 'quality_check', 'completed']
+        )
+        
+        # Production pipeline stats
+        production_stats = {
+            'cutting': warehouse_orders.filter(production_status='cutting').count(),
+            'sewing': warehouse_orders.filter(production_status='sewing').count(),
+            'finishing': warehouse_orders.filter(production_status='finishing').count(),
+            'quality_check': warehouse_orders.filter(production_status='quality_check').count(),
+            'completed': warehouse_orders.filter(production_status='completed').count(),
+            'total_in_production': warehouse_orders.count()
+        }
+        
+        # Get active tasks from warehouse
+        from tasks.models import Task
+        active_tasks = Task.objects.filter(
+            status__in=['pending', 'in_progress', 'paused'],
+            assigned_to__role__in=['warehouse_manager', 'warehouse_worker', 'warehouse']
+        )
+        
+        task_stats = {
+            'total_active_tasks': active_tasks.count(),
+            'pending_tasks': active_tasks.filter(status='pending').count(),
+            'in_progress_tasks': active_tasks.filter(status='in_progress').count(),
+            'paused_tasks': active_tasks.filter(status='paused').count()
+        }
+        
+        # Warehouse workforce
+        from users.models import User
+        warehouse_workers = User.objects.filter(
+            role__in=['warehouse_manager', 'warehouse_worker', 'warehouse'],
+            is_active=True
+        )
+        
+        workforce_stats = {
+            'total_workers': warehouse_workers.count(),
+            'managers': warehouse_workers.filter(role='warehouse_manager').count(),
+            'workers': warehouse_workers.filter(role__in=['warehouse_worker', 'warehouse']).count(),
+            'active_workers': warehouse_workers.filter(
+                id__in=active_tasks.values('assigned_to').distinct()
+            ).count()
+        }
+        
+        # Stock alerts (if inventory system exists)
+        stock_alerts = []
+        try:
+                         from inventory.models import Material
+             from django.db import models
+             low_stock_materials = Material.objects.filter(
+                 current_stock__lte=models.F('minimum_stock_level')
+             )[:10]
+            
+            for material in low_stock_materials:
+                stock_alerts.append({
+                    'material_name': material.name,
+                    'current_stock': material.current_stock,
+                    'minimum_level': material.minimum_stock_level,
+                    'shortage': material.minimum_stock_level - material.current_stock
+                })
+        except ImportError:
+            # Inventory system not available
+            pass
+        
+        # Recent warehouse activities
+        warehouse_activities = OrderHistory.objects.filter(
+            order__in=warehouse_orders,
+            action__icontains='production'
+        ).select_related('order', 'user').order_by('-timestamp')[:10]
+        
+        activities_data = []
+        for activity in warehouse_activities:
+            activities_data.append({
+                'order_number': activity.order.order_number,
+                'action': activity.action,
+                'details': activity.details,
+                'user': activity.user.get_full_name() if activity.user else 'System',
+                'timestamp': activity.timestamp
+            })
+        
+        # Bottleneck analysis
+        bottlenecks = []
+        if production_stats['cutting'] > 10:
+            bottlenecks.append({
+                'stage': 'Cutting',
+                'count': production_stats['cutting'],
+                'message': 'High number of orders in cutting stage'
+            })
+        if production_stats['sewing'] > 15:
+            bottlenecks.append({
+                'stage': 'Sewing',
+                'count': production_stats['sewing'],
+                'message': 'Potential bottleneck in sewing department'
+            })
+        if production_stats['quality_check'] > 8:
+            bottlenecks.append({
+                'stage': 'Quality Check',
+                'count': production_stats['quality_check'],
+                'message': 'Quality check backlog detected'
+            })
+        
+        return Response({
+            'production_pipeline': production_stats,
+            'task_overview': task_stats,
+            'workforce_summary': workforce_stats,
+            'stock_alerts': stock_alerts,
+            'recent_activities': activities_data,
+            'bottleneck_analysis': bottlenecks,
+            'navigation_message': {
+                'title': 'Warehouse Operations',
+                'description': 'For detailed warehouse management and operations control, please use the Warehouse Dashboard.',
+                'action_url': '/warehouse',
+                'action_text': 'Go to Warehouse Dashboard'
+            },
+            'last_updated': timezone.now()
         }) 

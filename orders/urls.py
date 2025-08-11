@@ -24,6 +24,11 @@ urlpatterns = [
     path('orders/workflow_dashboard/', views.OrderViewSet.as_view({'get': 'order_workflow_dashboard'}), name='order_workflow_dashboard'),
     path('orders/management_data/', views.OrderViewSet.as_view({'get': 'order_management_data'}), name='order_management_data'),
     
+    # Payment management endpoints
+    path('orders/payments_dashboard/', views.OrderViewSet.as_view({'get': 'payments_dashboard'}), name='payments_dashboard'),
+    path('orders/<int:pk>/update_payment/', views.OrderViewSet.as_view({'patch': 'update_payment'}), name='update_payment'),
+    path('orders/<int:pk>/mark_overdue/', views.OrderViewSet.as_view({'post': 'mark_payment_overdue'}), name='mark_payment_overdue'),
+    
     # Order actions
     path('orders/<int:pk>/advance_workflow/', views.OrderViewSet.as_view({'post': 'advance_workflow'}), name='advance_workflow'),
     path('orders/<int:pk>/assign/', views.OrderViewSet.as_view({'post': 'assign_order'}), name='assign_order'),
@@ -33,6 +38,7 @@ urlpatterns = [
     # Role-based dashboard endpoints
     path('orders/owner_dashboard/', views.OrderViewSet.as_view({'get': 'owner_dashboard_orders'}), name='owner_dashboard_orders'),
     path('orders/admin_dashboard/', views.OrderViewSet.as_view({'get': 'admin_dashboard_orders'}), name='admin_dashboard_orders'),
+    path('orders/admin_warehouse_overview/', views.OrderViewSet.as_view({'get': 'admin_warehouse_overview'}), name='admin_warehouse_overview'),
     path('orders/warehouse_dashboard/', views.OrderViewSet.as_view({'get': 'warehouse_dashboard_orders'}), name='warehouse_dashboard_orders'),
     path('orders/delivery_dashboard/', views.OrderViewSet.as_view({'get': 'delivery_dashboard_orders'}), name='delivery_dashboard_orders'),
     
