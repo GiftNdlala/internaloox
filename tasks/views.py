@@ -37,7 +37,7 @@ class TaskViewSet(viewsets.ModelViewSet):
     queryset = Task.objects.all()
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['status', 'priority', 'assigned_to', 'assigned_by', 'task_type', 'order']
+    filterset_fields = ['priority', 'assigned_to', 'assigned_by', 'task_type', 'order']
     search_fields = ['title', 'description', 'assigned_to__username', 'order__order_number']
     ordering = ['-priority', 'due_date', 'created_at']
     
@@ -80,14 +80,14 @@ class TaskViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(status='started')
         
         # Filter by status
-        status = self.request.query_params.get('status')
-        if status and status != 'all':
+        status_param = self.request.query_params.get('status')
+        if status_param and status_param != 'all':
             # Handle multiple status values separated by comma
-            if ',' in status:
-                status_list = [s.strip() for s in status.split(',')]
+            if ',' in status_param:
+                status_list = [s.strip() for s in status_param.split(',')]
                 queryset = queryset.filter(status__in=status_list)
             else:
-                queryset = queryset.filter(status=status)
+                queryset = queryset.filter(status=status_param)
         
         return queryset
     

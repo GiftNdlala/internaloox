@@ -1688,6 +1688,7 @@ def dashboard_stats(request):
             
             # Special handling for deposit paid status
             if payment_status == 'deposit_paid' and not order.deposit_paid_date:
+                from django.utils import timezone
                 order.deposit_paid_date = timezone.now()
                 order.order_status = 'deposit_paid'
                 changes.append("Activated production queue (deposit paid)")

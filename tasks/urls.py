@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 from . import views
 
 router = DefaultRouter()
-router.register(r'task-types', views.TaskTypeViewSet)
+router.register(r'task_types', views.TaskTypeViewSet)
 router.register(r'tasks', views.TaskViewSet)
 router.register(r'time-sessions', views.TaskTimeSessionViewSet)
 router.register(r'notes', views.TaskNoteViewSet)
