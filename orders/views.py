@@ -18,11 +18,12 @@ from .serializers import (
     ColorReferenceSerializer, FabricReferenceSerializer
 )
 from .permissions import CanCreateProducts
+from django.db import models
 
 class CustomerViewSet(viewsets.ModelViewSet):
     queryset = Customer.objects.all()
     serializer_class = CustomerSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]  # Change from AllowAny
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'phone', 'email']
     ordering_fields = ['created_at', 'name']
@@ -54,12 +55,47 @@ class CustomerViewSet(viewsets.ModelViewSet):
             return Response(mock_data)
         return super().list(request, *args, **kwargs)
 
+    def create(self, request, *args, **kwargs):
+        """Create customer with role-based permissions"""
+        user = request.user
+        
+        # Check if user can create customers
+        if user.role not in ['owner', 'admin']:
+            return Response({
+                'error': 'Permission denied: Only Owner and Admin can create customers',
+                'your_role': user.role
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        """Update customer with role-based permissions"""
+        user = request.user
+        
+        if user.role not in ['owner', 'admin']:
+            return Response({
+                'error': 'Permission denied: Only Owner and Admin can edit customers'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        """Delete customer with role-based permissions"""
+        user = request.user
+        
+        if user.role not in ['owner', 'admin']:
+            return Response({
+                'error': 'Permission denied: Only Owner and Admin can delete customers'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        return super().destroy(request, *args, **kwargs)
+
 class OrderViewSet(viewsets.ModelViewSet):
     queryset = Order.objects.all()
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]  # Change from AllowAny to IsAuthenticated
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['payment_status', 'order_status', 'created_by', 'assigned_to_warehouse', 'assigned_to_delivery']
-    search_fields = ['order_number', 'customer__name']
+    filterset_fields = ['payment_status', 'order_status', 'production_status', 'created_by', 'assigned_to_warehouse', 'assigned_to_delivery']
+    search_fields = ['order_number', 'customer__name', 'customer_name']
     ordering_fields = ['created_at', 'expected_delivery_date', 'total_amount']
     ordering = ['-created_at']
 
@@ -68,6 +104,209 @@ class OrderViewSet(viewsets.ModelViewSet):
         if self.action in ['list']:
             return OrderListSerializer
         return OrderSerializer
+
+    def get_queryset(self):
+        """Filter orders based on user role"""
+        user = self.request.user
+        queryset = Order.objects.all()
+        
+        # Owner and Admin can see all orders
+        if user.role in ['owner', 'admin']:
+            return queryset
+        
+        # Warehouse Manager can see orders assigned to warehouse or ready for production
+        elif user.role == 'warehouse_manager':
+            return queryset.filter(
+                models.Q(assigned_to_warehouse=user) |
+                models.Q(order_status__in=['deposit_paid', 'order_ready']) |
+                models.Q(production_status__in=['cutting', 'sewing', 'finishing', 'quality_check'])
+            )
+        
+        # Warehouse Worker can see orders assigned to them or general warehouse orders
+        elif user.role in ['warehouse_worker', 'warehouse']:
+            return queryset.filter(
+                models.Q(assigned_to_warehouse=user) |
+                models.Q(order_status__in=['deposit_paid', 'order_ready'])
+            )
+        
+        # Delivery can see orders ready for delivery or assigned to them
+        elif user.role == 'delivery':
+            return queryset.filter(
+                models.Q(assigned_to_delivery=user) |
+                models.Q(order_status__in=['order_ready', 'out_for_delivery'])
+            )
+        
+        # Other roles can only see orders they created
+        else:
+            return queryset.filter(created_by=user)
+
+    def create(self, request, *args, **kwargs):
+        """Create order with role-based permissions"""
+        user = request.user
+        
+        # Check if user can create orders
+        if user.role not in ['owner', 'admin']:
+            return Response({
+                'error': 'Permission denied: Only Owner and Admin can create orders',
+                'your_role': user.role,
+                'required_roles': ['owner', 'admin']
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Proceed with creation
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        """Update order with role-based permissions"""
+        user = request.user
+        instance = self.get_object()
+        
+        # Check if user can update orders
+        if user.role not in ['owner', 'admin']:
+            return Response({
+                'error': 'Permission denied: Only Owner and Admin can edit orders',
+                'your_role': user.role,
+                'required_roles': ['owner', 'admin']
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        """Delete order with role-based permissions"""
+        user = request.user
+        instance = self.get_object()
+        
+        # Check if user can delete orders
+        if user.role not in ['owner', 'admin']:
+            return Response({
+                'error': 'Permission denied: Only Owner and Admin can delete orders',
+                'your_role': user.role,
+                'required_roles': ['owner', 'admin']
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Prevent deletion of orders that are in production
+        if instance.production_status not in ['not_started']:
+            return Response({
+                'error': 'Cannot delete order: Order is already in production',
+                'production_status': instance.production_status,
+                'suggestion': 'Cancel the order instead of deleting it'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        return super().destroy(request, *args, **kwargs)
+
+    @action(detail=True, methods=['patch'])
+    def update_status(self, request, pk=None):
+        """Update order status with role-based permissions"""
+        order = self.get_object()
+        user = request.user
+        
+        # Define what statuses each role can change
+        role_permissions = {
+            'owner': ['all'],  # Owner can change to any status
+            'admin': ['all'],  # Admin can change to any status
+            'warehouse_manager': ['production_status', 'order_status_limited'],
+            'warehouse_worker': ['production_status_limited'],
+            'warehouse': ['production_status_limited'],
+            'delivery': ['order_status_delivery']
+        }
+        
+        new_order_status = request.data.get('order_status')
+        new_production_status = request.data.get('production_status')
+        
+        # Check permissions based on what's being updated
+        if new_order_status:
+            if not self._can_update_order_status(user, order, new_order_status):
+                return Response({
+                    'error': f'Permission denied: {user.role} cannot change order status to {new_order_status}',
+                    'your_role': user.role,
+                    'current_status': order.order_status,
+                    'requested_status': new_order_status
+                }, status=status.HTTP_403_FORBIDDEN)
+        
+        if new_production_status:
+            if not self._can_update_production_status(user, order, new_production_status):
+                return Response({
+                    'error': f'Permission denied: {user.role} cannot change production status to {new_production_status}',
+                    'your_role': user.role,
+                    'current_status': order.production_status,
+                    'requested_status': new_production_status
+                }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Update the order with validation
+        serializer = OrderStatusUpdateSerializer(order, data=request.data, partial=True, context={'request': request})
+        
+        if serializer.is_valid():
+            # Log the status change
+            old_order_status = order.order_status
+            old_production_status = order.production_status
+            
+            serializer.save()
+            
+            # Create history entry
+            changes = []
+            if new_order_status and new_order_status != old_order_status:
+                changes.append(f"Order status: {old_order_status} → {new_order_status}")
+            if new_production_status and new_production_status != old_production_status:
+                changes.append(f"Production status: {old_production_status} → {new_production_status}")
+            
+            if changes:
+                OrderHistory.objects.create(
+                    order=order,
+                    user=user,
+                    action="Status updated",
+                    details="; ".join(changes)
+                )
+            
+            return Response({
+                'message': 'Order status updated successfully',
+                'order_status': order.order_status,
+                'production_status': order.production_status,
+                'updated_by': user.get_full_name() or user.username,
+                'changes': changes
+            })
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def _can_update_order_status(self, user, order, new_status):
+        """Check if user can update order status"""
+        # Owner and admin can change to any status
+        if user.role in ['owner', 'admin']:
+            return True
+        
+        # Warehouse can only mark as ready for delivery
+        if user.role in ['warehouse_manager', 'warehouse_worker', 'warehouse']:
+            allowed_statuses = ['order_ready']
+            return new_status in allowed_statuses
+        
+        # Delivery can update delivery-related statuses
+        if user.role == 'delivery':
+            current_status = order.order_status
+            allowed_transitions = {
+                'order_ready': ['out_for_delivery'],
+                'out_for_delivery': ['delivered']
+            }
+            return new_status in allowed_transitions.get(current_status, [])
+        
+        return False
+
+    def _can_update_production_status(self, user, order, new_status):
+        """Check if user can update production status"""
+        # Owner and admin can change to any production status
+        if user.role in ['owner', 'admin']:
+            return True
+        
+        # Warehouse roles can update production stages
+        if user.role in ['warehouse_manager', 'warehouse_worker', 'warehouse']:
+            # Define allowed production status transitions
+            production_flow = [
+                'not_started', 'cutting', 'sewing', 'finishing', 'quality_check', 'completed'
+            ]
+            current_index = production_flow.index(order.production_status) if order.production_status in production_flow else 0
+            new_index = production_flow.index(new_status) if new_status in production_flow else -1
+            
+            # Can only move forward in production flow or stay at same stage
+            return new_index >= current_index and new_index != -1
+        
+        return False
 
     def retrieve(self, request, *args, **kwargs):
         """Override retrieve to add debugging"""
@@ -78,9 +317,6 @@ class OrderViewSet(viewsets.ModelViewSet):
         print(f"Order items count: {len(data.get('items', []))}")
         print(f"Order items data: {data.get('items', [])}")
         return Response(data)
-
-    def get_queryset(self):
-        return Order.objects.all()
     
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
     def escalate_priority(self, request, pk=None):
@@ -315,16 +551,6 @@ class OrderViewSet(viewsets.ModelViewSet):
             traceback.print_exc(file=sys.stdout)
             from rest_framework.exceptions import ValidationError
             raise ValidationError({'detail': f'Order update failed: {str(e)}'})
-
-    @action(detail=True, methods=['post'])
-    def update_status(self, request, pk=None):
-        order = self.get_object()
-        serializer = OrderStatusUpdateSerializer(order, data=request.data, partial=True, context={'request': request})
-        
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'])
     def assign_warehouse(self, request, pk=None):
@@ -598,11 +824,267 @@ class OrderViewSet(viewsets.ModelViewSet):
             'order_id': order.id,
             'order_number': order.order_number
         })
+    
+    @action(detail=False, methods=['get'])
+    def owner_dashboard_orders(self, request):
+        """Owner dashboard: Complete order overview with all controls"""
+        user = request.user
+        
+        if user.role != 'owner':
+            return Response({'error': 'Access denied: Owner access required'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Get all orders with comprehensive statistics
+        all_orders = self.get_queryset()
+        
+        # Order status breakdown
+        status_breakdown = {}
+        for status_choice in Order.ORDER_STATUS_CHOICES:
+            status_code = status_choice[0]
+            status_breakdown[status_code] = all_orders.filter(order_status=status_code).count()
+        
+        # Production status breakdown
+        production_breakdown = {}
+        for prod_choice in Order.PRODUCTION_STATUS_CHOICES:
+            prod_code = prod_choice[0]
+            production_breakdown[prod_code] = all_orders.filter(production_status=prod_code).count()
+        
+        # Financial overview
+        from django.db.models import Sum
+        financial_stats = all_orders.aggregate(
+            total_revenue=Sum('total_amount'),
+            total_deposits=Sum('deposit_amount'),
+            total_balance=Sum('balance_amount')
+        )
+        
+        # Recent orders
+        recent_orders = all_orders.order_by('-created_at')[:10]
+        
+        # Overdue orders
+        from django.utils import timezone
+        overdue_orders = all_orders.filter(
+            delivery_deadline__lt=timezone.now().date(),
+            order_status__in=['deposit_pending', 'deposit_paid', 'order_ready', 'out_for_delivery']
+        )
+        
+        # Priority orders
+        priority_orders = all_orders.filter(is_priority_order=True)
+        
+        return Response({
+            'dashboard_type': 'owner',
+            'permissions': {
+                'can_create': True,
+                'can_edit': True,
+                'can_delete': True,
+                'can_change_status': True,
+                'can_assign_users': True,
+                'can_escalate_priority': True
+            },
+            'statistics': {
+                'total_orders': all_orders.count(),
+                'status_breakdown': status_breakdown,
+                'production_breakdown': production_breakdown,
+                'financial_stats': {
+                    'total_revenue': float(financial_stats['total_revenue'] or 0),
+                    'total_deposits': float(financial_stats['total_deposits'] or 0),
+                    'total_balance': float(financial_stats['total_balance'] or 0)
+                },
+                'overdue_count': overdue_orders.count(),
+                'priority_count': priority_orders.count()
+            },
+            'recent_orders': OrderListSerializer(recent_orders, many=True).data,
+            'overdue_orders': OrderListSerializer(overdue_orders, many=True).data,
+            'priority_orders': OrderListSerializer(priority_orders, many=True).data
+        })
+    
+    @action(detail=False, methods=['get'])
+    def admin_dashboard_orders(self, request):
+        """Admin dashboard: Order management with limited controls"""
+        user = request.user
+        
+        if user.role != 'admin':
+            return Response({'error': 'Access denied: Admin access required'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Get all orders (admin can see all)
+        all_orders = self.get_queryset()
+        
+        # Orders needing attention
+        pending_orders = all_orders.filter(order_status='deposit_pending')
+        in_production = all_orders.filter(production_status__in=['cutting', 'sewing', 'finishing'])
+        ready_for_delivery = all_orders.filter(order_status='order_ready')
+        
+        # Recent activity
+        recent_orders = all_orders.order_by('-updated_at')[:15]
+        
+        return Response({
+            'dashboard_type': 'admin',
+            'permissions': {
+                'can_create': True,
+                'can_edit': True,
+                'can_delete': True,
+                'can_change_status': True,
+                'can_assign_users': True,
+                'can_escalate_priority': False
+            },
+            'statistics': {
+                'total_orders': all_orders.count(),
+                'pending_orders': pending_orders.count(),
+                'in_production': in_production.count(),
+                'ready_for_delivery': ready_for_delivery.count()
+            },
+            'pending_orders': OrderListSerializer(pending_orders, many=True).data,
+            'in_production': OrderListSerializer(in_production, many=True).data,
+            'ready_for_delivery': OrderListSerializer(ready_for_delivery, many=True).data,
+            'recent_orders': OrderListSerializer(recent_orders, many=True).data
+        })
+    
+    @action(detail=False, methods=['get'])
+    def warehouse_dashboard_orders(self, request):
+        """Warehouse dashboard: Production-focused order view"""
+        user = request.user
+        
+        if user.role not in ['warehouse_manager', 'warehouse_worker', 'warehouse']:
+            return Response({'error': 'Access denied: Warehouse access required'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Get orders relevant to warehouse
+        warehouse_orders = self.get_queryset()
+        
+        # Orders by production stage
+        not_started = warehouse_orders.filter(production_status='not_started')
+        cutting = warehouse_orders.filter(production_status='cutting')
+        sewing = warehouse_orders.filter(production_status='sewing')
+        finishing = warehouse_orders.filter(production_status='finishing')
+        quality_check = warehouse_orders.filter(production_status='quality_check')
+        completed = warehouse_orders.filter(production_status='completed')
+        
+        # Orders assigned to current user
+        my_orders = warehouse_orders.filter(assigned_to_warehouse=user) if user.role != 'warehouse_worker' else warehouse_orders
+        
+        return Response({
+            'dashboard_type': 'warehouse',
+            'permissions': {
+                'can_create': False,
+                'can_edit': False,
+                'can_delete': False,
+                'can_change_status': True,  # Only production status
+                'can_assign_users': False,
+                'can_escalate_priority': False
+            },
+            'statistics': {
+                'total_orders': warehouse_orders.count(),
+                'not_started': not_started.count(),
+                'cutting': cutting.count(),
+                'sewing': sewing.count(),
+                'finishing': finishing.count(),
+                'quality_check': quality_check.count(),
+                'completed': completed.count()
+            },
+            'production_stages': {
+                'not_started': OrderListSerializer(not_started, many=True).data,
+                'cutting': OrderListSerializer(cutting, many=True).data,
+                'sewing': OrderListSerializer(sewing, many=True).data,
+                'finishing': OrderListSerializer(finishing, many=True).data,
+                'quality_check': OrderListSerializer(quality_check, many=True).data,
+                'completed': OrderListSerializer(completed, many=True).data
+            },
+            'my_orders': OrderListSerializer(my_orders, many=True).data if user.role != 'warehouse_worker' else []
+        })
+    
+    @action(detail=False, methods=['get'])
+    def delivery_dashboard_orders(self, request):
+        """Delivery dashboard: Delivery-focused order view"""
+        user = request.user
+        
+        if user.role != 'delivery':
+            return Response({'error': 'Access denied: Delivery access required'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Get orders relevant to delivery
+        delivery_orders = self.get_queryset()
+        
+        # Orders by delivery status
+        ready_for_delivery = delivery_orders.filter(order_status='order_ready')
+        out_for_delivery = delivery_orders.filter(order_status='out_for_delivery')
+        delivered = delivery_orders.filter(order_status='delivered')
+        
+        # Orders assigned to current user
+        my_deliveries = delivery_orders.filter(assigned_to_delivery=user)
+        
+        # Today's deliveries
+        from django.utils import timezone
+        today = timezone.now().date()
+        todays_deliveries = delivery_orders.filter(
+            expected_delivery_date=today,
+            order_status__in=['order_ready', 'out_for_delivery']
+        )
+        
+        return Response({
+            'dashboard_type': 'delivery',
+            'permissions': {
+                'can_create': False,
+                'can_edit': False,
+                'can_delete': False,
+                'can_change_status': True,  # Only delivery status
+                'can_assign_users': False,
+                'can_escalate_priority': False
+            },
+            'statistics': {
+                'total_orders': delivery_orders.count(),
+                'ready_for_delivery': ready_for_delivery.count(),
+                'out_for_delivery': out_for_delivery.count(),
+                'delivered': delivered.count(),
+                'todays_deliveries': todays_deliveries.count()
+            },
+            'delivery_stages': {
+                'ready_for_delivery': OrderListSerializer(ready_for_delivery, many=True).data,
+                'out_for_delivery': OrderListSerializer(out_for_delivery, many=True).data,
+                'delivered': OrderListSerializer(delivered[:10], many=True).data  # Recent deliveries
+            },
+            'my_deliveries': OrderListSerializer(my_deliveries, many=True).data,
+            'todays_deliveries': OrderListSerializer(todays_deliveries, many=True).data
+        })
+    
+    @action(detail=True, methods=['post'])
+    def cancel_order(self, request, pk=None):
+        """Cancel an order (owner/admin only)"""
+        user = request.user
+        order = self.get_object()
+        
+        if user.role not in ['owner', 'admin']:
+            return Response({
+                'error': 'Permission denied: Only Owner and Admin can cancel orders'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Check if order can be cancelled
+        if order.order_status in ['delivered', 'cancelled']:
+            return Response({
+                'error': f'Cannot cancel order: Order is already {order.order_status}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Cancel the order
+        reason = request.data.get('reason', 'Cancelled by admin')
+        old_status = order.order_status
+        order.order_status = 'cancelled'
+        order.save()
+        
+        # Log the cancellation
+        OrderHistory.objects.create(
+            order=order,
+            user=user,
+            action="Order cancelled",
+            details=f"Cancelled from {old_status}. Reason: {reason}"
+        )
+        
+        return Response({
+            'message': 'Order cancelled successfully',
+            'order_number': order.order_number,
+            'previous_status': old_status,
+            'cancelled_by': user.get_full_name() or user.username,
+            'reason': reason
+        })
 
 class PaymentProofViewSet(viewsets.ModelViewSet):
     queryset = PaymentProof.objects.all()
     serializer_class = PaymentProofSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['order', 'payment_type']
     ordering = ['-uploaded_at']
@@ -632,7 +1114,7 @@ class PaymentProofViewSet(viewsets.ModelViewSet):
 class OrderHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = OrderHistory.objects.all()
     serializer_class = OrderHistorySerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['order', 'user', 'action']
     ordering = ['-timestamp']
@@ -671,14 +1153,14 @@ class ProductViewSet(viewsets.ModelViewSet):
 class ColorViewSet(viewsets.ModelViewSet):
     queryset = Color.objects.all()
     serializer_class = ColorSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     ordering = ['name']
 
 class FabricViewSet(viewsets.ModelViewSet):
     queryset = Fabric.objects.all()
     serializer_class = FabricSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     ordering = ['name']
 
@@ -686,21 +1168,21 @@ class FabricViewSet(viewsets.ModelViewSet):
 class ColorReferenceViewSet(viewsets.ModelViewSet):
     queryset = ColorReference.objects.all()
     serializer_class = ColorReferenceSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     ordering = ['color_code']
 
 class FabricReferenceViewSet(viewsets.ModelViewSet):
     queryset = FabricReference.objects.all()
     serializer_class = FabricReferenceSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     ordering = ['fabric_letter']
 
 class OrderItemViewSet(viewsets.ModelViewSet):
     queryset = OrderItem.objects.all()
     serializer_class = OrderItemSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['order', 'product', 'color', 'fabric']
     ordering = ['-id']
@@ -716,7 +1198,7 @@ class OrderItemViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def dashboard_stats(request):
     """
     Comprehensive dashboard statistics for OOX Furniture frontend
