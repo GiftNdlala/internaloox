@@ -1325,3 +1325,316 @@ def dashboard_stats(request):
             'production_capacity': in_production + cutting + sewing + finishing,
         }
     }) 
+
+    @action(detail=False, methods=['get'])
+    def order_workflow_dashboard(self, request):
+        """Complete order workflow dashboard - shows orders by workflow stage"""
+        user = request.user
+        
+        # Get all orders visible to user
+        all_orders = self.get_queryset()
+        
+        # Define order workflow stages
+        workflow_stages = {
+            'new_orders': all_orders.filter(order_status='deposit_pending'),
+            'paid_orders': all_orders.filter(order_status='deposit_paid'),
+            'in_production': all_orders.filter(
+                order_status='deposit_paid',
+                production_status__in=['cutting', 'sewing', 'finishing', 'quality_check']
+            ),
+            'ready_for_delivery': all_orders.filter(order_status='order_ready'),
+            'out_for_delivery': all_orders.filter(order_status='out_for_delivery'),
+            'completed': all_orders.filter(order_status='delivered'),
+            'cancelled': all_orders.filter(order_status='cancelled')
+        }
+        
+        # Calculate workflow metrics
+        workflow_metrics = {}
+        for stage, queryset in workflow_stages.items():
+            workflow_metrics[stage] = {
+                'count': queryset.count(),
+                'orders': OrderListSerializer(queryset[:10], many=True).data  # Limit for performance
+            }
+        
+        # Get recent workflow activities
+        recent_activities = OrderHistory.objects.filter(
+            order__in=all_orders
+        ).select_related('order', 'user').order_by('-timestamp')[:20]
+        
+        activities_data = []
+        for activity in recent_activities:
+            activities_data.append({
+                'id': activity.id,
+                'order_number': activity.order.order_number,
+                'action': activity.action,
+                'details': activity.details,
+                'user': activity.user.get_full_name() if activity.user else 'System',
+                'timestamp': activity.timestamp,
+                'order_id': activity.order.id
+            })
+        
+        # Calculate workflow performance
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        today = timezone.now().date()
+        week_ago = today - timedelta(days=7)
+        
+        performance_metrics = {
+            'orders_created_this_week': all_orders.filter(created_at__date__gte=week_ago).count(),
+            'orders_completed_this_week': all_orders.filter(
+                order_status='delivered',
+                actual_delivery_date__gte=week_ago
+            ).count(),
+            'average_production_time': self._calculate_average_production_time(all_orders),
+            'overdue_orders': all_orders.filter(
+                delivery_deadline__lt=today,
+                order_status__in=['deposit_pending', 'deposit_paid', 'order_ready', 'out_for_delivery']
+            ).count()
+        }
+        
+        return Response({
+            'workflow_stages': workflow_metrics,
+            'recent_activities': activities_data,
+            'performance_metrics': performance_metrics,
+            'user_permissions': self._get_user_workflow_permissions(user)
+        })
+    
+    def _calculate_average_production_time(self, orders):
+        """Calculate average production time for completed orders"""
+        completed_orders = orders.filter(
+            order_status='delivered',
+            deposit_paid_date__isnull=False,
+            actual_delivery_date__isnull=False
+        )
+        
+        if not completed_orders.exists():
+            return 0
+        
+        total_days = 0
+        count = 0
+        
+        for order in completed_orders:
+            if order.deposit_paid_date and order.actual_delivery_date:
+                days = (order.actual_delivery_date - order.deposit_paid_date.date()).days
+                total_days += days
+                count += 1
+        
+        return round(total_days / count, 1) if count > 0 else 0
+    
+    def _get_user_workflow_permissions(self, user):
+        """Get user permissions for workflow actions"""
+        permissions = {
+            'can_create_orders': user.role in ['owner', 'admin'],
+            'can_edit_orders': user.role in ['owner', 'admin'],
+            'can_delete_orders': user.role in ['owner', 'admin'],
+            'can_change_order_status': user.role in ['owner', 'admin'],
+            'can_change_production_status': user.role in ['owner', 'admin', 'warehouse_manager', 'warehouse_worker', 'warehouse'],
+            'can_change_delivery_status': user.role in ['owner', 'admin', 'delivery'],
+            'can_assign_to_warehouse': user.role in ['owner', 'admin'],
+            'can_assign_to_delivery': user.role in ['owner', 'admin'],
+            'can_escalate_priority': user.role == 'owner',
+            'can_cancel_orders': user.role in ['owner', 'admin']
+        }
+        return permissions
+    
+    @action(detail=True, methods=['post'])
+    def advance_workflow(self, request, pk=None):
+        """Advance order to next workflow stage"""
+        order = self.get_object()
+        user = request.user
+        
+        # Define workflow transitions
+        workflow_transitions = {
+            'deposit_pending': 'deposit_paid',
+            'deposit_paid': 'order_ready',
+            'order_ready': 'out_for_delivery',
+            'out_for_delivery': 'delivered'
+        }
+        
+        current_status = order.order_status
+        next_status = workflow_transitions.get(current_status)
+        
+        if not next_status:
+            return Response({
+                'error': f'No next stage available for status: {current_status}',
+                'current_status': current_status
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check permissions for status change
+        if not self._can_advance_workflow(user, order, next_status):
+            return Response({
+                'error': f'Permission denied: Cannot advance order from {current_status} to {next_status}',
+                'your_role': user.role
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Perform the status change
+        old_status = order.order_status
+        order.order_status = next_status
+        
+        # Handle special workflow logic
+        if next_status == 'deposit_paid':
+            order.deposit_paid_date = timezone.now()
+        elif next_status == 'out_for_delivery':
+            if not order.expected_delivery_date:
+                order.expected_delivery_date = timezone.now().date() + timedelta(days=1)
+        elif next_status == 'delivered':
+            order.actual_delivery_date = timezone.now().date()
+        
+        order.save()
+        
+        # Log the workflow advancement
+        OrderHistory.objects.create(
+            order=order,
+            user=user,
+            action="Workflow advanced",
+            details=f"Advanced from {old_status} to {next_status}"
+        )
+        
+        return Response({
+            'message': f'Order advanced from {old_status} to {next_status}',
+            'order_number': order.order_number,
+            'previous_status': old_status,
+            'new_status': next_status,
+            'next_possible_status': workflow_transitions.get(next_status, 'Complete')
+        })
+    
+    def _can_advance_workflow(self, user, order, next_status):
+        """Check if user can advance workflow to next status"""
+        # Owner and admin can advance any workflow
+        if user.role in ['owner', 'admin']:
+            return True
+        
+        # Warehouse can mark orders ready for delivery
+        if user.role in ['warehouse_manager', 'warehouse_worker', 'warehouse'] and next_status == 'order_ready':
+            return True
+        
+        # Delivery can mark orders out for delivery and delivered
+        if user.role == 'delivery' and next_status in ['out_for_delivery', 'delivered']:
+            return True
+        
+        return False
+    
+    @action(detail=True, methods=['post'])
+    def assign_order(self, request, pk=None):
+        """Assign order to warehouse or delivery personnel"""
+        order = self.get_object()
+        user = request.user
+        
+        # Check permissions
+        if user.role not in ['owner', 'admin']:
+            return Response({
+                'error': 'Permission denied: Only Owner and Admin can assign orders'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        assignment_type = request.data.get('assignment_type')  # 'warehouse' or 'delivery'
+        assigned_user_id = request.data.get('assigned_user_id')
+        
+        if not assignment_type or not assigned_user_id:
+            return Response({
+                'error': 'assignment_type and assigned_user_id are required',
+                'valid_assignment_types': ['warehouse', 'delivery']
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            from users.models import User
+            assigned_user = User.objects.get(id=assigned_user_id)
+            
+            if assignment_type == 'warehouse':
+                if not assigned_user.is_warehouse:
+                    return Response({
+                        'error': 'User must have warehouse role for warehouse assignment'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                old_assignment = order.assigned_to_warehouse
+                order.assigned_to_warehouse = assigned_user
+                assignment_field = 'warehouse'
+                
+            elif assignment_type == 'delivery':
+                if assigned_user.role != 'delivery':
+                    return Response({
+                        'error': 'User must have delivery role for delivery assignment'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                old_assignment = order.assigned_to_delivery
+                order.assigned_to_delivery = assigned_user
+                assignment_field = 'delivery'
+                
+            else:
+                return Response({
+                    'error': 'Invalid assignment_type',
+                    'valid_types': ['warehouse', 'delivery']
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            order.save()
+            
+            # Log the assignment
+            old_name = old_assignment.get_full_name() if old_assignment else 'Unassigned'
+            new_name = assigned_user.get_full_name() or assigned_user.username
+            
+            OrderHistory.objects.create(
+                order=order,
+                user=user,
+                action=f"Order assigned to {assignment_field}",
+                details=f"Changed from {old_name} to {new_name}"
+            )
+            
+            return Response({
+                'message': f'Order assigned to {assignment_field} successfully',
+                'order_number': order.order_number,
+                'assignment_type': assignment_field,
+                'assigned_to': new_name,
+                'previous_assignment': old_name
+            })
+            
+        except User.DoesNotExist:
+            return Response({
+                'error': 'Assigned user not found'
+            }, status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=False, methods=['get'])
+    def order_management_data(self, request):
+        """Get comprehensive data for order management interface"""
+        user = request.user
+        
+        # Get all available data for order management
+        from users.models import User
+        
+        # Available users for assignment
+        warehouse_users = User.objects.filter(
+            role__in=['warehouse_manager', 'warehouse_worker', 'warehouse'],
+            is_active=True
+        ).values('id', 'username', 'first_name', 'last_name', 'role')
+        
+        delivery_users = User.objects.filter(
+            role='delivery',
+            is_active=True
+        ).values('id', 'username', 'first_name', 'last_name', 'role')
+        
+        # Order status choices
+        order_statuses = [{'value': choice[0], 'label': choice[1]} for choice in Order.ORDER_STATUS_CHOICES]
+        production_statuses = [{'value': choice[0], 'label': choice[1]} for choice in Order.PRODUCTION_STATUS_CHOICES]
+        
+        # Recent customers for quick order creation
+        recent_customers = Customer.objects.order_by('-created_at')[:20]
+        customers_data = CustomerSerializer(recent_customers, many=True).data
+        
+        # Available products
+        products = Product.objects.filter(is_active=True).order_by('product_name')[:50]
+        products_data = ProductSerializer(products, many=True).data
+        
+        return Response({
+            'assignment_options': {
+                'warehouse_users': list(warehouse_users),
+                'delivery_users': list(delivery_users)
+            },
+            'status_options': {
+                'order_statuses': order_statuses,
+                'production_statuses': production_statuses
+            },
+            'order_creation_data': {
+                'recent_customers': customers_data,
+                'available_products': products_data
+            },
+            'user_permissions': self._get_user_workflow_permissions(user)
+        }) 
