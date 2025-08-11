@@ -1911,11 +1911,11 @@ def dashboard_stats(request):
         # Stock alerts (if inventory system exists)
         stock_alerts = []
         try:
-                         from inventory.models import Material
-             from django.db import models
-             low_stock_materials = Material.objects.filter(
-                 current_stock__lte=models.F('minimum_stock_level')
-             )[:10]
+            from inventory.models import Material
+            from django.db import models
+            low_stock_materials = Material.objects.filter(
+                current_stock__lte=models.F('minimum_stock_level')
+            )[:10]
             
             for material in low_stock_materials:
                 stock_alerts.append({
