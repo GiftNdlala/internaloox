@@ -201,20 +201,25 @@ class UserViewSet(viewsets.ModelViewSet):
         # Role-based filtering for frontend dropdown population
         role_filter = self.request.query_params.get('role')
         if role_filter:
-            # Support both exact role matches and role categories
-            if role_filter == 'warehouse_worker':
-                queryset = queryset.filter(Q(role='warehouse_worker') | Q(role='warehouse'))
-            elif role_filter == 'warehouse_manager':
-                queryset = queryset.filter(role='warehouse_manager')
-            elif role_filter == 'delivery':
-                queryset = queryset.filter(role='delivery')
-            elif role_filter == 'admin':
-                queryset = queryset.filter(role='admin')
-            elif role_filter == 'owner':
-                queryset = queryset.filter(role='owner')
+            # Accept comma-separated roles for flexible filtering
+            if ',' in role_filter:
+                roles = [r.strip() for r in role_filter.split(',') if r.strip()]
+                queryset = queryset.filter(role__in=roles)
             else:
-                # Direct role match for any other role
-                queryset = queryset.filter(role=role_filter)
+                # Support both exact role matches and role categories
+                if role_filter == 'warehouse_worker':
+                    queryset = queryset.filter(Q(role='warehouse_worker') | Q(role='warehouse'))
+                elif role_filter == 'warehouse_manager':
+                    queryset = queryset.filter(role='warehouse_manager')
+                elif role_filter == 'delivery':
+                    queryset = queryset.filter(role='delivery')
+                elif role_filter == 'admin':
+                    queryset = queryset.filter(role='admin')
+                elif role_filter == 'owner':
+                    queryset = queryset.filter(role='owner')
+                else:
+                    # Direct role match for any other role
+                    queryset = queryset.filter(role=role_filter)
         
         # Filter based on user role permissions
         if self.request.user.is_owner:

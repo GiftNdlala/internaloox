@@ -23,6 +23,7 @@ urlpatterns = [
     # Core workflow endpoints
     path('orders/workflow_dashboard/', views.OrderViewSet.as_view({'get': 'order_workflow_dashboard'}), name='order_workflow_dashboard'),
     path('orders/management_data/', views.OrderViewSet.as_view({'get': 'order_management_data'}), name='order_management_data'),
+    path('orders/status_options/', views.OrderViewSet.as_view({'get': 'status_options'}), name='status_options'),
     
     # Payment management endpoints
     path('orders/payments_dashboard/', views.OrderViewSet.as_view({'get': 'payments_dashboard'}), name='payments_dashboard'),

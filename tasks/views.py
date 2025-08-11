@@ -700,12 +700,12 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
         user = request.user
         
         # Only supervisors can access
-        if user.role not in ['owner', 'admin', 'warehouse']:
+        if user.role not in ['owner', 'admin', 'warehouse_manager']:
             return Response({'error': 'Access denied'}, status=status.HTTP_403_FORBIDDEN)
         
         # All warehouse workers
         warehouse_workers = User.objects.filter(
-            Q(role='warehouse_worker') | Q(role='warehouse')
+            Q(role='warehouse_worker') | Q(role='warehouse') | Q(role='warehouse_manager')
         )
         
         # Task overview

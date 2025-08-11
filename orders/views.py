@@ -272,10 +272,20 @@ class OrderViewSet(viewsets.ModelViewSet):
         if user.role in ['owner', 'admin']:
             return True
         
-        # Warehouse can only mark as ready for delivery
+        # Warehouse roles: allow controlled transitions
         if user.role in ['warehouse_manager', 'warehouse_worker', 'warehouse']:
-            allowed_statuses = ['order_ready']
-            return new_status in allowed_statuses
+            current_status = order.order_status
+            # Base allowed: workers can only mark deposit_paid -> order_ready
+            if user.role in ['warehouse_worker', 'warehouse']:
+                return current_status == 'deposit_paid' and new_status == 'order_ready'
+            
+            # Managers can also move order_ready -> out_for_delivery
+            if user.role == 'warehouse_manager':
+                allowed_transitions = {
+                    'deposit_paid': ['order_ready'],
+                    'order_ready': ['out_for_delivery'],
+                }
+                return new_status in allowed_transitions.get(current_status, [])
         
         # Delivery can update delivery-related statuses
         if user.role == 'delivery':
@@ -1428,7 +1438,7 @@ def dashboard_stats(request):
             'can_create_orders': user.role in ['owner', 'admin'],
             'can_edit_orders': user.role in ['owner', 'admin'],
             'can_delete_orders': user.role in ['owner', 'admin'],
-            'can_change_order_status': user.role in ['owner', 'admin'],
+            'can_change_order_status': user.role in ['owner', 'admin', 'warehouse_manager', 'warehouse'],
             'can_change_production_status': user.role in ['owner', 'admin', 'warehouse_manager', 'warehouse_worker', 'warehouse'],
             'can_change_delivery_status': user.role in ['owner', 'admin', 'delivery'],
             'can_assign_to_warehouse': user.role in ['owner', 'admin'],
@@ -1980,3 +1990,15 @@ def dashboard_stats(request):
             },
             'last_updated': timezone.now()
         }) 
+
+    @action(detail=False, methods=['get'])
+    def status_options(self, request):
+        """Expose status dropdown options to frontend consumers."""
+        order_statuses = [{'value': choice[0], 'label': choice[1]} for choice in Order.ORDER_STATUS_CHOICES]
+        production_statuses = [{'value': choice[0], 'label': choice[1]} for choice in Order.PRODUCTION_STATUS_CHOICES]
+        return Response({
+            'status_options': {
+                'order_statuses': order_statuses,
+                'production_statuses': production_statuses
+            }
+        })
