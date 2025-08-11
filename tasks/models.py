@@ -156,6 +156,12 @@ class Task(models.Model):
                 task=self,
                 started_at=timezone.now()
             )
+            # Auto-advance order production status when work starts
+            if self.order:
+                order = self.order
+                if order.production_status == 'not_started':
+                    order.production_status = 'in_production'
+                    order.save(update_fields=['production_status', 'updated_at'])
             return True
         return False
     
@@ -231,6 +237,9 @@ class Task(models.Model):
                 notification_type='task_completed',
                 message=f"Task '{self.title}' has been completed by {self.assigned_to.get_full_name() or self.assigned_to.username}"
             )
+
+            # Recompute order production state
+            self._update_order_after_task_change()
             return True
         return False
     
@@ -247,6 +256,8 @@ class Task(models.Model):
                 notification_type='task_approved',
                 message=f"Your task '{self.title}' has been approved by {approver.get_full_name() or approver.username}"
             )
+            # Recompute order production and readiness when approvals happen
+            self._update_order_after_task_change()
             return True
         return False
     
@@ -264,16 +275,57 @@ class Task(models.Model):
                 content=f"Task rejected. Reason: {reason}" if reason else "Task rejected."
             )
             
-            # Create notification for worker
+            # Notify worker
             TaskNotification.objects.create(
                 task=self,
                 recipient=self.assigned_to,
                 notification_type='task_rejected',
-                message=f"Your task '{self.title}' has been rejected by {rejector.get_full_name() or rejector.username}. Reason: {reason}"
+                message=f"Your task '{self.title}' was rejected by {rejector.get_full_name() or rejector.username}. {('Reason: ' + reason) if reason else ''}"
             )
             return True
         return False
-    
+
+    def _update_order_after_task_change(self):
+        """Recalculate and persist the related order's production and order status from task progress."""
+        if not self.order:
+            return
+        order = self.order
+        task_statuses = list(order.tasks.values_list('status', flat=True))
+        if not task_statuses:
+            return
+        total_tasks = len(task_statuses)
+        approved_count = sum(1 for s in task_statuses if s == 'approved')
+        in_progress = any(s in ['started', 'paused'] for s in task_statuses)
+
+        # If everything is approved, production is complete and order is ready for delivery handoff
+        if approved_count == total_tasks:
+            changed = False
+            if order.production_status != 'completed':
+                order.production_status = 'completed'
+                changed = True
+            # Move to ready for delivery queue if not already in delivery flow
+            if order.order_status not in ['out_for_delivery', 'delivered'] and order.order_status != 'order_ready':
+                order.order_status = 'order_ready'
+                changed = True
+            if changed:
+                order.save()
+                try:
+                    from orders.models import OrderHistory
+                    OrderHistory.objects.create(
+                        order=order,
+                        user=self.assigned_by,
+                        action='Order production completed',
+                        details='All tasks approved; moved to Ready for Delivery'
+                    )
+                except Exception:
+                    pass
+            return
+
+        # Otherwise, if any task is running, ensure production is marked active
+        if in_progress and order.production_status == 'not_started':
+            order.production_status = 'in_production'
+            order.save(update_fields=['production_status', 'updated_at'])
+
 
 class Notification(models.Model):
     """System notifications for users"""

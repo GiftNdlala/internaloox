@@ -1227,13 +1227,13 @@ def dashboard_stats(request):
     pending_orders = Order.objects.filter(order_status='pending').count()
     confirmed_orders = Order.objects.filter(order_status='confirmed').count()
     in_production = Order.objects.filter(production_status='in_production').count()
-    ready_for_delivery = Order.objects.filter(production_status='ready_for_delivery').count()
+    ready_for_delivery = Order.objects.filter(order_status='order_ready').count()
     delivered_orders = Order.objects.filter(order_status='delivered').count()
     
     # Overdue orders (past delivery deadline)
     overdue_orders = Order.objects.filter(
         delivery_deadline__lt=today,
-        order_status__in=['pending', 'confirmed', 'in_production', 'ready_for_delivery']
+        order_status__in=['pending', 'confirmed', 'order_ready', 'out_for_delivery']
     ).count()
     
     # Customer Statistics
@@ -1329,7 +1329,7 @@ def dashboard_stats(request):
             'orders_today': Order.objects.filter(order_date__date=today).count(),
             'deliveries_today': Order.objects.filter(
                 expected_delivery_date=today,
-                order_status='ready_for_delivery'
+                order_status='order_ready'
             ).count(),
             'urgent_orders': overdue_orders,
             'production_capacity': in_production + cutting + sewing + finishing,
