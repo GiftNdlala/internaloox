@@ -79,6 +79,16 @@ class TaskViewSet(viewsets.ModelViewSet):
         if self.request.query_params.get('running') == 'true':
             queryset = queryset.filter(status='started')
         
+        # Filter by status
+        status = self.request.query_params.get('status')
+        if status and status != 'all':
+            # Handle multiple status values separated by comma
+            if ',' in status:
+                status_list = [s.strip() for s in status.split(',')]
+                queryset = queryset.filter(status__in=status_list)
+            else:
+                queryset = queryset.filter(status=status)
+        
         return queryset
     
     def perform_create(self, serializer):
