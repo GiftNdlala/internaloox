@@ -575,7 +575,9 @@ class WorkerProductivityViewSet(viewsets.ReadOnlyModelViewSet):
                 'start_date': start_date,
                 'end_date': end_date
             },
-            'worker_summaries': list(worker_summaries.values())
+            'worker_summaries': list(worker_summaries.values()),
+            'manage_workers_endpoint': '/api/users/users/?role=warehouse_worker,warehouse',
+            'can_manage_workers': True
         })
 
 
@@ -703,13 +705,15 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
         if user.role not in ['owner', 'admin', 'warehouse_manager']:
             return Response({'error': 'Access denied'}, status=status.HTTP_403_FORBIDDEN)
         
-        # All warehouse workers
+        # All warehouse workers (include legacy and manager for overview)
         warehouse_workers = User.objects.filter(
-            Q(role='warehouse_worker') | Q(role='warehouse') | Q(role='warehouse_manager')
+            Q(role='warehouse_worker') | Q(role='warehouse')
         )
         
-        # Task overview
-        all_tasks = Task.objects.all()
+        # Task overview (restrict to warehouse roles only)
+        all_tasks = Task.objects.filter(
+            Q(assigned_to__role__in=['warehouse_worker', 'warehouse'])
+        )
         total_tasks = all_tasks.count()
         assigned_tasks = all_tasks.filter(status='assigned').count()
         in_progress_tasks = all_tasks.filter(status='started').count()

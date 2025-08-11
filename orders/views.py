@@ -773,7 +773,9 @@ class OrderViewSet(viewsets.ModelViewSet):
                 from tasks.models import TaskType, Task
                 
                 # Get required data
-                assigned_to = User.objects.get(id=task_data['assigned_to_id'], role='warehouse')
+                assigned_to = User.objects.get(id=task_data['assigned_to_id'])
+                if not assigned_to.is_warehouse_worker:
+                    raise User.DoesNotExist('Assigned user is not a warehouse worker')
                 task_type = TaskType.objects.get(id=task_data['task_type_id'])
                 
                 # Create the task
@@ -1441,7 +1443,7 @@ def dashboard_stats(request):
             'can_change_order_status': user.role in ['owner', 'admin', 'warehouse_manager', 'warehouse'],
             'can_change_production_status': user.role in ['owner', 'admin', 'warehouse_manager', 'warehouse_worker', 'warehouse'],
             'can_change_delivery_status': user.role in ['owner', 'admin', 'delivery'],
-            'can_assign_to_warehouse': user.role in ['owner', 'admin'],
+            'can_assign_to_warehouse': user.role in ['owner', 'admin', 'warehouse_manager'],
             'can_assign_to_delivery': user.role in ['owner', 'admin'],
             'can_escalate_priority': user.role == 'owner',
             'can_cancel_orders': user.role in ['owner', 'admin']
