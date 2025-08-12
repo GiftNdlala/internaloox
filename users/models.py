@@ -41,7 +41,7 @@ class User(AbstractUser):
     
     @property
     def is_warehouse_worker(self):
-        return self.role in ['warehouse_worker', 'warehouse']  # Include legacy 'warehouse' role
+        return self.role in ['warehouse_worker']  # 'warehouse' now acts as manager
     
     @property
     def is_delivery(self):
