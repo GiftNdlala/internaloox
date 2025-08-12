@@ -32,6 +32,25 @@ class TaskTypeViewSet(viewsets.ModelViewSet):
     search_fields = ['name', 'description']
     ordering = ['sequence_order', 'name']
 
+    def list(self, request, *args, **kwargs):
+        # Auto-seed defaults if empty so frontend always gets task types
+        if not TaskType.objects.exists():
+            defaults = [
+                {'name': 'Material Preparation', 'description': 'Prepare and gather materials for production', 'estimated_duration_minutes': 30, 'requires_materials': True, 'sequence_order': 1},
+                {'name': 'Cutting', 'description': 'Cut materials according to specifications', 'estimated_duration_minutes': 60, 'requires_materials': True, 'sequence_order': 2},
+                {'name': 'Frame Assembly', 'description': 'Assemble wooden frame structure', 'estimated_duration_minutes': 90, 'requires_materials': True, 'sequence_order': 3},
+                {'name': 'Foam Installation', 'description': 'Install foam padding and cushioning', 'estimated_duration_minutes': 45, 'requires_materials': True, 'sequence_order': 4},
+                {'name': 'Upholstery', 'description': 'Apply fabric covering and upholstery work', 'estimated_duration_minutes': 120, 'requires_materials': True, 'sequence_order': 5},
+                {'name': 'Finishing', 'description': 'Final touches, trimming, and detail work', 'estimated_duration_minutes': 60, 'requires_materials': True, 'sequence_order': 6},
+                {'name': 'Quality Check', 'description': 'Inspect finished product for quality', 'estimated_duration_minutes': 30, 'requires_materials': False, 'sequence_order': 7},
+                {'name': 'Packaging', 'description': 'Package product for delivery', 'estimated_duration_minutes': 20, 'requires_materials': True, 'sequence_order': 8},
+                {'name': 'Stock Management', 'description': 'Update inventory and stock levels', 'estimated_duration_minutes': 15, 'requires_materials': False, 'sequence_order': 9},
+                {'name': 'Maintenance', 'description': 'Equipment and workspace maintenance', 'estimated_duration_minutes': 45, 'requires_materials': False, 'sequence_order': 10},
+            ]
+            for d in defaults:
+                TaskType.objects.get_or_create(name=d['name'], defaults=d)
+        return super().list(request, *args, **kwargs)
+
 
 class TaskViewSet(viewsets.ModelViewSet):
     queryset = Task.objects.all()
