@@ -115,7 +115,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             return queryset
         
         # Warehouse Manager can see orders assigned to warehouse or ready for production
-        elif user.role == 'warehouse_manager':
+        elif user.role == 'warehouse':
             return queryset.filter(
                 models.Q(assigned_to_warehouse=user) |
                 models.Q(order_status__in=['deposit_paid', 'order_ready']) |
@@ -273,14 +273,13 @@ class OrderViewSet(viewsets.ModelViewSet):
             return True
         
         # Warehouse roles: allow controlled transitions
-        if user.role in ['warehouse_manager', 'warehouse_worker', 'warehouse']:
+        if user.role in ['warehouse_worker', 'warehouse']:
             current_status = order.order_status
-            # Base allowed: workers can only mark deposit_paid -> order_ready
-            if user.role in ['warehouse_worker', 'warehouse']:
+            # Workers can only mark deposit_paid -> order_ready
+            if user.role == 'warehouse_worker':
                 return current_status == 'deposit_paid' and new_status == 'order_ready'
-            
-            # Managers can also move order_ready -> out_for_delivery
-            if user.role == 'warehouse_manager':
+            # Warehouse (manager) can also move order_ready -> out_for_delivery
+            if user.role == 'warehouse':
                 allowed_transitions = {
                     'deposit_paid': ['order_ready'],
                     'order_ready': ['out_for_delivery'],
@@ -305,7 +304,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             return True
         
         # Warehouse roles can update production stages
-        if user.role in ['warehouse_manager', 'warehouse_worker', 'warehouse']:
+        if user.role in ['warehouse_worker', 'warehouse']:
             # Define allowed production status transitions
             production_flow = [
                 'not_started', 'cutting', 'sewing', 'finishing', 'quality_check', 'completed'
@@ -968,7 +967,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         """Warehouse dashboard: Production-focused order view"""
         user = request.user
         
-        if user.role not in ['warehouse_manager', 'warehouse_worker', 'warehouse']:
+        if user.role not in ['warehouse_worker', 'warehouse']:
             return Response({'error': 'Access denied: Warehouse access required'}, status=status.HTTP_403_FORBIDDEN)
         
         # Get orders relevant to warehouse
@@ -1454,10 +1453,10 @@ def dashboard_stats(request):
             'can_create_orders': user.role in ['owner', 'admin'],
             'can_edit_orders': user.role in ['owner', 'admin'],
             'can_delete_orders': user.role in ['owner', 'admin'],
-            'can_change_order_status': user.role in ['owner', 'admin', 'warehouse_manager', 'warehouse'],
-            'can_change_production_status': user.role in ['owner', 'admin', 'warehouse_manager', 'warehouse_worker', 'warehouse'],
+            'can_change_order_status': user.role in ['owner', 'admin', 'warehouse'],
+            'can_change_production_status': user.role in ['owner', 'admin', 'warehouse_worker', 'warehouse'],
             'can_change_delivery_status': user.role in ['owner', 'admin', 'delivery'],
-            'can_assign_to_warehouse': user.role in ['owner', 'admin', 'warehouse_manager'],
+            'can_assign_to_warehouse': user.role in ['owner', 'admin', 'warehouse'],
             'can_assign_to_delivery': user.role in ['owner', 'admin'],
             'can_escalate_priority': user.role == 'owner',
             'can_cancel_orders': user.role in ['owner', 'admin']
@@ -1535,7 +1534,7 @@ def dashboard_stats(request):
             return True
         
         # Warehouse can mark orders ready for delivery
-        if user.role in ['warehouse_manager', 'warehouse_worker', 'warehouse'] and next_status == 'order_ready':
+        if user.role in ['warehouse', 'warehouse_worker'] and next_status == 'order_ready':
             return True
         
         # Delivery can mark orders out for delivery and delivered
@@ -1631,7 +1630,7 @@ def dashboard_stats(request):
         
         # Available users for assignment
         warehouse_users = User.objects.filter(
-            role__in=['warehouse_manager', 'warehouse_worker', 'warehouse'],
+            role__in=['warehouse_worker', 'warehouse'],
             is_active=True
         ).values('id', 'username', 'first_name', 'last_name', 'role')
         
@@ -1909,7 +1908,7 @@ def dashboard_stats(request):
         from tasks.models import Task
         active_tasks = Task.objects.filter(
             status__in=['pending', 'in_progress', 'paused'],
-            assigned_to__role__in=['warehouse_manager', 'warehouse_worker', 'warehouse']
+            assigned_to__role__in=['warehouse_worker', 'warehouse']
         )
         
         task_stats = {
@@ -1922,13 +1921,13 @@ def dashboard_stats(request):
         # Warehouse workforce
         from users.models import User
         warehouse_workers = User.objects.filter(
-            role__in=['warehouse_manager', 'warehouse_worker', 'warehouse'],
+            role__in=['warehouse_worker', 'warehouse'],
             is_active=True
         )
         
         workforce_stats = {
             'total_workers': warehouse_workers.count(),
-            'managers': warehouse_workers.filter(role='warehouse_manager').count(),
+            'managers': warehouse_workers.filter(role='warehouse').count(),
             'workers': warehouse_workers.filter(role__in=['warehouse_worker', 'warehouse']).count(),
             'active_workers': warehouse_workers.filter(
                 id__in=active_tasks.values('assigned_to').distinct()

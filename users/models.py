@@ -54,9 +54,9 @@ class User(AbstractUser):
     @property
     def can_manage_tasks(self):
         """Check if user can create and assign tasks"""
-        return self.role in ['owner', 'admin', 'warehouse_manager']
+        return self.role in ['owner', 'admin', 'warehouse']
     
     @property
     def can_manage_workers(self):
         """Check if user can manage warehouse workers"""
-        return self.role in ['owner', 'admin', 'warehouse_manager'] 
+        return self.role in ['owner', 'admin', 'warehouse'] 

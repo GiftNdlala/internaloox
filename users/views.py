@@ -36,11 +36,10 @@ def user_has_role_permission(user, requested_role):
     # Lower index = lower privilege
     role_hierarchy = {
         'delivery': 0,
-        'warehouse': 1,
-        'warehouse_worker': 1,  # Same level as legacy warehouse
-        'warehouse_manager': 2,
-        'admin': 3,
-        'owner': 4
+        'warehouse_worker': 1,
+            'warehouse': 2,
+            'admin': 3,
+            'owner': 4
     }
     
     # Get role levels
@@ -151,7 +150,7 @@ class UserPermissionsView(APIView):
         available_roles = []
         
         # Check which roles the user can access based on hierarchy
-        roles_to_check = ['delivery', 'warehouse', 'warehouse_worker', 'warehouse_manager', 'admin', 'owner']
+        roles_to_check = ['delivery', 'warehouse_worker', 'warehouse', 'admin', 'owner']
         for role in roles_to_check:
             if user_has_role_permission(user, role):
                 # Map role names to display labels
@@ -159,7 +158,7 @@ class UserPermissionsView(APIView):
                     'delivery': 'Delivery',
                     'warehouse': 'Warehouse (Legacy)',
                     'warehouse_worker': 'Warehouse Worker',
-                    'warehouse_manager': 'Warehouse Manager',
+                    
                     'admin': 'Admin',
                     'owner': 'Owner'
                 }
@@ -176,7 +175,6 @@ class UserPermissionsView(APIView):
             'permissions': {
                 'can_access_owner': user_has_role_permission(user, 'owner'),
                 'can_access_admin': user_has_role_permission(user, 'admin'),
-                'can_access_warehouse_manager': user_has_role_permission(user, 'warehouse_manager'),
                 'can_access_warehouse': user_has_role_permission(user, 'warehouse'),
                 'can_access_warehouse_worker': user_has_role_permission(user, 'warehouse_worker'),
                 'can_access_delivery': user_has_role_permission(user, 'delivery'),
@@ -209,8 +207,7 @@ class UserViewSet(viewsets.ModelViewSet):
                 # Support both exact role matches and role categories
                 if role_filter == 'warehouse_worker':
                     queryset = queryset.filter(Q(role='warehouse_worker') | Q(role='warehouse'))
-                elif role_filter == 'warehouse_manager':
-                    queryset = queryset.filter(role='warehouse_manager')
+                
                 elif role_filter == 'delivery':
                     queryset = queryset.filter(role='delivery')
                 elif role_filter == 'admin':
@@ -239,13 +236,13 @@ class UserViewSet(viewsets.ModelViewSet):
         # Define permission matrix
         if user_role == 'owner':
             # Owners can create any role
-            allowed_roles = ['owner', 'admin', 'warehouse_manager', 'warehouse_worker', 'warehouse', 'delivery']
+            allowed_roles = ['owner', 'admin', 'warehouse_worker', 'warehouse', 'delivery']
         elif user_role == 'admin':
-            # Admins can create warehouse_manager, warehouse_worker, and delivery
-            allowed_roles = ['warehouse_manager', 'warehouse_worker', 'warehouse', 'delivery']
-        elif user_role == 'warehouse_manager':
-            # Warehouse managers can only create warehouse_worker
-            allowed_roles = ['warehouse_worker', 'warehouse']
+            # Admins can create warehouse_worker and delivery
+            allowed_roles = ['warehouse_worker', 'warehouse', 'delivery']
+        elif user_role == 'warehouse':
+            # Warehouse (manager) can create warehouse_worker
+            allowed_roles = ['warehouse_worker']
         else:
             # Other roles cannot create users
             allowed_roles = []
@@ -279,13 +276,13 @@ class UserViewSet(viewsets.ModelViewSet):
         # Define permission matrix - same as create permissions
         if user_role == 'owner':
             # Owners can update any role
-            allowed_roles = ['owner', 'admin', 'warehouse_manager', 'warehouse_worker', 'warehouse', 'delivery']
+            allowed_roles = ['owner', 'admin', 'warehouse_worker', 'warehouse', 'delivery']
         elif user_role == 'admin':
-            # Admins can update warehouse_manager, warehouse_worker, and delivery
-            allowed_roles = ['warehouse_manager', 'warehouse_worker', 'warehouse', 'delivery']
-        elif user_role == 'warehouse_manager':
-            # Warehouse managers can only update warehouse_worker
-            allowed_roles = ['warehouse_worker', 'warehouse']
+            # Admins can update warehouse_worker and delivery
+            allowed_roles = ['warehouse_worker', 'warehouse', 'delivery']
+        elif user_role == 'warehouse':
+            # Warehouse (manager) can update warehouse_worker
+            allowed_roles = ['warehouse_worker']
         else:
             # Other roles cannot update users
             allowed_roles = []
@@ -319,13 +316,13 @@ class UserViewSet(viewsets.ModelViewSet):
         # Define permission matrix - same as create/update permissions
         if user_role == 'owner':
             # Owners can delete any role
-            allowed_roles = ['owner', 'admin', 'warehouse_manager', 'warehouse_worker', 'warehouse', 'delivery']
+            allowed_roles = ['owner', 'admin', 'warehouse_worker', 'warehouse', 'delivery']
         elif user_role == 'admin':
-            # Admins can delete warehouse_manager, warehouse_worker, and delivery
-            allowed_roles = ['warehouse_manager', 'warehouse_worker', 'warehouse', 'delivery']
-        elif user_role == 'warehouse_manager':
-            # Warehouse managers can only delete warehouse_worker
-            allowed_roles = ['warehouse_worker', 'warehouse']
+            # Admins can delete warehouse_worker and delivery
+            allowed_roles = ['warehouse_worker', 'warehouse', 'delivery']
+        elif user_role == 'warehouse':
+            # Warehouse (manager) can only delete warehouse_worker
+            allowed_roles = ['warehouse_worker']
         else:
             # Other roles cannot delete users
             allowed_roles = []
@@ -560,7 +557,7 @@ def warehouse_workers(request):
     try:
         # Get all warehouse workers (both new and legacy roles)
         workers = User.objects.filter(
-            Q(role='warehouse_worker') | Q(role='warehouse') | Q(role='warehouse_manager'),
+            Q(role='warehouse_worker') | Q(role='warehouse'),
             is_active=True
         ).order_by('first_name', 'last_name')
         

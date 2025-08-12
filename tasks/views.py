@@ -702,7 +702,7 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
         user = request.user
         
         # Only supervisors can access
-        if user.role not in ['owner', 'admin', 'warehouse_manager']:
+        if user.role not in ['owner', 'admin', 'warehouse']:
             return Response({'error': 'Access denied'}, status=status.HTTP_403_FORBIDDEN)
         
         # All warehouse workers (include legacy and manager for overview)
