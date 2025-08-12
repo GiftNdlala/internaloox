@@ -215,6 +215,8 @@ class ProductSerializer(serializers.ModelSerializer):
     currency = serializers.CharField(write_only=True, required=False, default='ZAR')
     color = serializers.CharField(write_only=True, required=False, allow_blank=True)
     fabric = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    colors = serializers.ListField(child=serializers.CharField(allow_blank=False), write_only=True, required=False, allow_empty=True)
+    fabrics = serializers.ListField(child=serializers.CharField(allow_blank=False), write_only=True, required=False, allow_empty=True)
     sku = serializers.CharField(write_only=True, required=False, allow_blank=True)
     attributes = serializers.JSONField(required=False)
 
@@ -229,6 +231,8 @@ class ProductSerializer(serializers.ModelSerializer):
 
     # Read-only aliased fields in responses
     created_at = serializers.DateTimeField(read_only=True)
+    colors = serializers.ListField(child=serializers.CharField(), read_only=True)
+    fabrics = serializers.ListField(child=serializers.CharField(), read_only=True)
 
     class Meta:
         model = Product
@@ -267,6 +271,8 @@ class ProductSerializer(serializers.ModelSerializer):
         currency = validated_data.pop('currency', 'ZAR')
         color_name = validated_data.pop('color', '').strip() if 'color' in validated_data else (self.initial_data.get('color', '').strip() if hasattr(self, 'initial_data') else '')
         fabric_name = validated_data.pop('fabric', '').strip() if 'fabric' in validated_data else (self.initial_data.get('fabric', '').strip() if hasattr(self, 'initial_data') else '')
+        color_list = validated_data.pop('colors', self.initial_data.get('colors', []) if hasattr(self, 'initial_data') else []) or []
+        fabric_list = validated_data.pop('fabrics', self.initial_data.get('fabrics', []) if hasattr(self, 'initial_data') else []) or []
         sku = validated_data.pop('sku', '').strip() if 'sku' in validated_data else (self.initial_data.get('sku', '').strip() if hasattr(self, 'initial_data') else '')
         attributes = validated_data.pop('attributes', validated_data.get('attributes', None))
 
@@ -281,19 +287,21 @@ class ProductSerializer(serializers.ModelSerializer):
         product = super().create(validated_data)
 
         # Persist color/fabric as options (legacy simple storage)
-        if color_name:
-            Color.objects.get_or_create(name=color_name)
-            from .models import ProductOption
-            ProductOption.objects.create(product=product, option_type='color', value=color_name)
-        if fabric_name:
-            Fabric.objects.get_or_create(name=fabric_name)
-            from .models import ProductOption
-            ProductOption.objects.create(product=product, option_type='fabric', value=fabric_name)
+        from .models import ProductOption
+        # Build unique sets from singletons + arrays
+        color_values = {v.strip() for v in ([color_name] if color_name else []) + list(color_list) if isinstance(v, str) and v.strip()}
+        fabric_values = {v.strip() for v in ([fabric_name] if fabric_name else []) + list(fabric_list) if isinstance(v, str) and v.strip()}
+        for cv in color_values:
+            Color.objects.get_or_create(name=cv)
+            ProductOption.objects.get_or_create(product=product, option_type='color', value=cv)
+        for fv in fabric_values:
+            Fabric.objects.get_or_create(name=fv)
+            ProductOption.objects.get_or_create(product=product, option_type='fabric', value=fv)
 
         # Attach currency and echo fields for response
         self._response_currency = currency
-        self._response_color = color_name
-        self._response_fabric = fabric_name
+        self._response_colors = list(color_values)
+        self._response_fabrics = list(fabric_values)
         self._response_sku = sku
         self._response_price = price
         self._response_attributes = attributes
@@ -309,22 +317,18 @@ class ProductSerializer(serializers.ModelSerializer):
         data['sku'] = getattr(self, '_response_sku', instance.model_code or '')
         # attributes
         data['attributes'] = instance.attributes or getattr(self, '_response_attributes', {}) or {}
-        # Try fetch options for color/fabric
-        color_value = getattr(self, '_response_color', None)
-        fabric_value = getattr(self, '_response_fabric', None)
+        # Try fetch options for colors/fabrics
+        colors_list = getattr(self, '_response_colors', None)
+        fabrics_list = getattr(self, '_response_fabrics', None)
         try:
-            if not color_value:
-                opt = instance.options.filter(option_type='color').first()
-                color_value = opt.value if opt else None
-            if not fabric_value:
-                opt = instance.options.filter(option_type='fabric').first()
-                fabric_value = opt.value if opt else None
+            if colors_list is None:
+                colors_list = list(instance.options.filter(option_type='color').values_list('value', flat=True))
+            if fabrics_list is None:
+                fabrics_list = list(instance.options.filter(option_type='fabric').values_list('value', flat=True))
         except Exception:
             pass
-        if color_value:
-            data['color'] = color_value
-        if fabric_value:
-            data['fabric'] = fabric_value
+        data['colors'] = colors_list or []
+        data['fabrics'] = fabrics_list or []
         return data
 
 class ColorSerializer(serializers.ModelSerializer):
