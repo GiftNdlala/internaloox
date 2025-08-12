@@ -64,6 +64,14 @@ class MaterialSerializer(serializers.ModelSerializer):
         # Map category_id -> category
         if 'category_id' in initial and initial.get('category_id'):
             attrs['category'] = initial.get('category_id')
+        # Default category to 'other' if none provided
+        if not attrs.get('category') and not initial.get('category') and not initial.get('category_id'):
+            try:
+                from .models import MaterialCategory
+                default_cat, _ = MaterialCategory.objects.get_or_create(name='other', defaults={'is_active': True})
+                attrs['category'] = default_cat.id
+            except Exception:
+                pass
         return super().validate(attrs)
 
     def to_representation(self, instance):
