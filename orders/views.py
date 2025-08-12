@@ -363,7 +363,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             }, status=status.HTTP_403_FORBIDDEN)
         
         # Validate input data
-        required_fields = ['title', 'task_type_id', 'assigned_to_id']
+        required_fields = ['title', 'assigned_to_id']
         for field in required_fields:
             if field not in request.data:
                 return Response({
@@ -371,8 +371,16 @@ class OrderViewSet(viewsets.ModelViewSet):
                 }, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            # Get task type
-            task_type = TaskType.objects.get(id=request.data['task_type_id'])
+            # Get task type by id or name
+            task_type = None
+            task_type_id = request.data.get('task_type_id')
+            task_type_name = request.data.get('task_type_name')
+            if task_type_id is not None:
+                task_type = TaskType.objects.get(id=task_type_id)
+            elif task_type_name:
+                task_type = TaskType.objects.get(name=task_type_name)
+            else:
+                return Response({'error': 'Missing required field: task_type_id or task_type_name'}, status=status.HTTP_400_BAD_REQUEST)
             
             # Get assigned worker
             assigned_worker = User.objects.get(id=request.data['assigned_to_id'])
@@ -776,7 +784,13 @@ class OrderViewSet(viewsets.ModelViewSet):
                 assigned_to = User.objects.get(id=task_data['assigned_to_id'])
                 if not assigned_to.is_warehouse_worker:
                     raise User.DoesNotExist('Assigned user is not a warehouse worker')
-                task_type = TaskType.objects.get(id=task_data['task_type_id'])
+                task_type = None
+                if 'task_type_id' in task_data and task_data['task_type_id'] is not None:
+                    task_type = TaskType.objects.get(id=task_data['task_type_id'])
+                elif 'task_type_name' in task_data and task_data['task_type_name']:
+                    task_type = TaskType.objects.get(name=task_data['task_type_name'])
+                else:
+                    raise TaskType.DoesNotExist('task_type_id or task_type_name required')
                 
                 # Create the task
                 task = Task.objects.create(
