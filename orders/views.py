@@ -400,6 +400,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 'instructions': request.data.get('instructions', ''),
                 'materials_needed': request.data.get('materials_needed', ''),
                 'estimated_duration': timedelta(minutes=request.data.get('estimated_duration', 60)),
+                'order_item_id': request.data.get('order_item_id'),
             }
             
             # Set deadline if provided

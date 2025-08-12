@@ -60,6 +60,7 @@ class TaskSerializer(serializers.ModelSerializer):
     assigned_by_username = serializers.CharField(source='assigned_by.username', read_only=True)
     task_type_name = serializers.CharField(source='task_type.name', read_only=True)
     order_number = serializers.CharField(source='order.order_number', read_only=True)
+    order_item_details = serializers.SerializerMethodField()
     
     # Time tracking fields
     is_overdue = serializers.BooleanField(read_only=True)
@@ -94,6 +95,19 @@ class TaskSerializer(serializers.ModelSerializer):
         minutes = (total_seconds % 3600) // 60
         return f"{hours}h {minutes}m"
 
+    def get_order_item_details(self, obj):
+        item = getattr(obj, 'order_item', None)
+        if not item:
+            return None
+        return {
+            'id': item.id,
+            'product_name': getattr(item.product, 'product_name', None) or getattr(item.product, 'name', None),
+            'quantity': item.quantity,
+            'unit_price': str(item.unit_price),
+            'color_name': getattr(item, 'color_name', None),
+            'fabric_name': getattr(item, 'fabric_name', None),
+        }
+
 
 class TaskListSerializer(serializers.ModelSerializer):
     """Simplified serializer for listing tasks"""
@@ -101,6 +115,7 @@ class TaskListSerializer(serializers.ModelSerializer):
     assigned_by_name = serializers.CharField(source='assigned_by.get_full_name', read_only=True)
     task_type_name = serializers.CharField(source='task_type.name', read_only=True)
     order_number = serializers.CharField(source='order.order_number', read_only=True)
+    order_item_details = serializers.SerializerMethodField()
     is_overdue = serializers.BooleanField(read_only=True)
     is_running = serializers.BooleanField(read_only=True)
     
@@ -109,9 +124,22 @@ class TaskListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'status', 'priority', 'assigned_to', 'assigned_to_name',
             'assigned_by', 'assigned_by_name', 'task_type', 'task_type_name',
-            'order', 'order_number', 'due_date', 'is_overdue', 'is_running',
+            'order', 'order_number', 'order_item', 'order_item_details', 'due_date', 'is_overdue', 'is_running',
             'created_at', 'updated_at'
         ]
+
+    def get_order_item_details(self, obj):
+        item = getattr(obj, 'order_item', None)
+        if not item:
+            return None
+        return {
+            'id': item.id,
+            'product_name': getattr(item.product, 'product_name', None) or getattr(item.product, 'name', None),
+            'quantity': item.quantity,
+            'unit_price': str(item.unit_price),
+            'color_name': getattr(item, 'color_name', None),
+            'fabric_name': getattr(item, 'fabric_name', None),
+        }
 
 
 class TaskNotificationSerializer(serializers.ModelSerializer):
