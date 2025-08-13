@@ -16,6 +16,7 @@ import logging
 logger = logging.getLogger(__name__)
 from rest_framework_simplejwt.tokens import RefreshToken
 import json
+from rest_framework.decorators import action
 
 def user_has_role_permission(user, requested_role):
     """
@@ -309,6 +310,7 @@ class UserViewSet(viewsets.ModelViewSet):
         })
 
     def destroy(self, request, *args, **kwargs):
+        try:
         instance = self.get_object()
         user_role = request.user.role
         
@@ -333,7 +335,9 @@ class UserViewSet(viewsets.ModelViewSet):
                 'error': f'Permission denied: {user_role} cannot delete {instance.role} users',
                 'allowed_roles': allowed_roles,
                 'your_role': user_role,
-                'target_user_role': instance.role
+                    'target_user_role': instance.role,
+                    'target_user_id': instance.id,
+                    'target_username': instance.username
             }, status=status.HTTP_403_FORBIDDEN)
         
         # Prevent deleting yourself
@@ -341,15 +345,33 @@ class UserViewSet(viewsets.ModelViewSet):
             return Response({
                 'error': 'You cannot delete your own account',
                 'suggestion': 'Ask another authorized user to delete your account if needed'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Additional safety check - prevent deleting the last owner
+            if instance.role == 'owner':
+                owner_count = User.objects.filter(role='owner').count()
+                if owner_count <= 1:
+                    return Response({
+                        'error': 'Cannot delete the last owner account',
+                        'suggestion': 'Create another owner account first before deleting this one'
             }, status=status.HTTP_400_BAD_REQUEST)
         
         username = instance.username
+            user_id = instance.id
         instance.delete()
         
         return Response({
             'success': True,
-            'message': f'User "{username}" deleted successfully'
+                'message': f'User "{username}" (ID: {user_id}) deleted successfully'
         }, status=status.HTTP_204_NO_CONTENT)
+            
+        except Exception as e:
+            import traceback
+            print(f"User deletion error: {str(e)}")
+            print(f"Traceback: {traceback.format_exc()}")
+            return Response({
+                'error': f'Failed to delete user: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -381,6 +403,105 @@ class UserViewSet(viewsets.ModelViewSet):
             'total_users': queryset.count(),
             'user_role': request.user.role
         }) 
+    
+    @action(detail=False, methods=['get'])
+    def warehouse_workers(self, request):
+        """Get warehouse workers for warehouse managers"""
+        user_role = request.user.role
+        
+        # Check permissions
+        if user_role not in ['owner', 'admin', 'warehouse']:
+            return Response({
+                'error': 'Insufficient permissions to view warehouse workers'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Filter users based on role
+        if user_role == 'warehouse':
+            # Warehouse managers can only see warehouse workers and delivery
+            queryset = User.objects.filter(role__in=['warehouse_worker', 'delivery'])
+        else:
+            # Owners and admins can see all warehouse-related users
+            queryset = User.objects.filter(role__in=['warehouse_worker', 'warehouse', 'delivery'])
+        
+        serializer = UserListSerializer(queryset, many=True)
+        return Response({
+            'success': True,
+            'warehouse_workers': serializer.data,
+            'total_count': queryset.count()
+        })
+    
+    @action(detail=False, methods=['post'])
+    def add_warehouse_worker(self, request):
+        """Add a new warehouse worker or delivery personnel"""
+        user_role = request.user.role
+        
+        # Check permissions
+        if user_role not in ['owner', 'admin', 'warehouse']:
+            return Response({
+                'error': 'Insufficient permissions to add warehouse workers'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Determine allowed roles based on user's role
+        if user_role == 'warehouse':
+            # Warehouse managers can only add warehouse workers and delivery
+            allowed_roles = ['warehouse_worker', 'delivery']
+        elif user_role == 'admin':
+            # Admins can add warehouse workers, warehouse managers, and delivery
+            allowed_roles = ['warehouse_worker', 'warehouse', 'delivery']
+        else:
+            # Owners can add any role
+            allowed_roles = ['warehouse_worker', 'warehouse', 'admin', 'delivery']
+        
+        requested_role = request.data.get('role', 'warehouse_worker')
+        
+        if requested_role not in allowed_roles:
+            return Response({
+                'error': f'Permission denied: {user_role} cannot create {requested_role} users',
+                'allowed_roles': allowed_roles,
+                'your_role': user_role,
+                'requested_role': requested_role
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Use the existing CreateUserView logic
+        create_view = CreateUserView()
+        create_view.request = request
+        return create_view.post(request)
+    
+    @action(detail=True, methods=['post'])
+    def update_worker_status(self, request, pk=None):
+        """Update warehouse worker status (active/inactive)"""
+        user_role = request.user.role
+        
+        # Check permissions
+        if user_role not in ['owner', 'admin', 'warehouse']:
+            return Response({
+                'error': 'Insufficient permissions to update worker status'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        worker = self.get_object()
+        
+        # Check if user can modify this worker
+        if user_role == 'warehouse':
+            if worker.role not in ['warehouse_worker', 'delivery']:
+                return Response({
+                    'error': 'Warehouse managers can only update warehouse workers and delivery personnel'
+                }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Update worker status
+        is_active = request.data.get('is_active')
+        if is_active is not None:
+            worker.is_active = is_active
+            worker.save()
+            
+            status_text = 'activated' if is_active else 'deactivated'
+            return Response({
+                'success': True,
+                'message': f'Worker "{worker.username}" {status_text} successfully'
+            })
+        
+        return Response({
+            'error': 'is_active field is required'
+        }, status=status.HTTP_400_BAD_REQUEST)
 
 class CreateUserView(APIView):
     """

@@ -12,6 +12,7 @@ from .models import (
     MaterialCategory, Supplier, Material, StockMovement,
     ProductMaterial, StockAlert, MaterialConsumptionPrediction
 )
+from orders.models import Product
 from .serializers import (
     MaterialCategorySerializer, SupplierSerializer, MaterialSerializer, MaterialListSerializer,
     StockMovementSerializer, ProductMaterialSerializer, StockAlertSerializer,
@@ -308,54 +309,84 @@ class MaterialViewSet(viewsets.ModelViewSet):
     def quick_stock_entry(self, request):
         """Quick stock entry endpoint for warehouse workers"""
         entries = request.data.get('entries', [])
-        results = []
         
-        for entry in entries:
+        if not entries:
+            return Response({'error': 'No entries provided'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        created_movements = []
+        errors = []
+        
+        for i, entry_data in enumerate(entries):
             try:
-                material = Material.objects.get(id=entry['material_id'])
-                quantity = float(entry['quantity'])
-                reason = entry.get('reason', 'Stock entry')
-                unit_cost = float(entry.get('unit_cost', material.cost_per_unit))
-                location = entry.get('location', '')
+                # Validate required fields
+                required_fields = ['material_id', 'movement_type', 'quantity']
+                for field in required_fields:
+                    if field not in entry_data:
+                        errors.append(f"Entry {i+1}: Missing required field '{field}'")
+                        continue
+                
+                if errors:
+                    continue
+                    
+                material = Material.objects.get(id=entry_data['material_id'])
                 
                 # Create stock movement
-                movement = StockMovement.objects.create(
-                    material=material,
-                    movement_type='in',
-                    quantity=quantity,
-                    unit_cost=unit_cost,
-                    reason=reason,
-                    notes=f"Location: {location}" if location else "",
-                    created_by=request.user
-                )
+                movement_data = {
+                    'material': material,
+                    'movement_type': entry_data['movement_type'],  # 'in' or 'out'
+                    'quantity': float(entry_data['quantity']),
+                    'reason': entry_data.get('reason', ''),
+                    'location': entry_data.get('location', ''),
+                    'batch_number': entry_data.get('batch_number', ''),
+                    'created_by': request.user
+                }
                 
-                results.append({
-                    'material_id': material.id,
+                # Set expiry date if provided
+                if entry_data.get('expiry_date'):
+                    from django.utils.dateparse import parse_date
+                    expiry_date = parse_date(entry_data['expiry_date'])
+                    if expiry_date:
+                        movement_data['expiry_date'] = expiry_date
+                
+                movement = StockMovement.objects.create(**movement_data)
+                
+                # Update material stock
+                if entry_data['movement_type'] == 'in':
+                    material.current_stock += movement_data['quantity']
+                else:  # 'out'
+                    material.current_stock -= movement_data['quantity']
+                    if material.current_stock < 0:
+                        material.current_stock = 0  # Prevent negative stock
+                
+                material.save()
+                
+                created_movements.append({
+                    'movement_id': movement.id,
                     'material_name': material.name,
-                    'status': 'success',
-                    'new_stock': float(material.current_stock),
-                    'movement_id': movement.id
+                    'movement_type': movement.movement_type,
+                    'quantity': movement.quantity,
+                    'new_stock_level': material.current_stock,
+                    'status': 'success'
                 })
                 
             except Material.DoesNotExist:
-                results.append({
-                    'material_id': entry.get('material_id'),
-                    'status': 'error',
-                    'message': 'Material not found'
-                })
-            except (ValueError, KeyError) as e:
-                results.append({
-                    'material_id': entry.get('material_id'),
-                    'status': 'error',
-                    'message': str(e)
-                })
+                errors.append(f"Entry {i+1}: Material with ID {entry_data.get('material_id')} not found")
+            except ValueError as e:
+                errors.append(f"Entry {i+1}: Invalid quantity value")
+            except Exception as e:
+                errors.append(f"Entry {i+1}: {str(e)}")
         
-        return Response({
-            'results': results,
-            'total_processed': len(results),
-            'successful': len([r for r in results if r['status'] == 'success']),
-            'errors': len([r for r in results if r['status'] == 'error'])
-        })
+        response_data = {
+            'message': f'{len(created_movements)} stock movements created',
+            'movements': created_movements,
+            'success_count': len(created_movements),
+            'error_count': len(errors)
+        }
+        
+        if errors:
+            response_data['errors'] = errors
+        
+        return Response(response_data)
 
 
 class StockMovementViewSet(viewsets.ModelViewSet):
@@ -578,86 +609,194 @@ class MaterialConsumptionPredictionViewSet(viewsets.ReadOnlyModelViewSet):
         return Response({'error': 'Invalid report type'}, status=status.HTTP_400_BAD_REQUEST)
 
 
+class ProductViewSet(viewsets.ModelViewSet):
+    """Product management for warehouse managers"""
+    queryset = Product.objects.all()
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['category', 'product_type', 'is_active', 'available_for_order']
+    search_fields = ['product_name', 'name', 'model_code', 'description']
+    ordering = ['-created_at']
+    
+    def get_queryset(self):
+        """Filter products based on user role"""
+        user = self.request.user
+        
+        # Warehouse managers can see all products
+        if user.role in ['owner', 'admin', 'warehouse']:
+            return Product.objects.all()
+        
+        # Workers see only active products
+        return Product.objects.filter(is_active=True, available_for_order=True)
+    
+    @action(detail=True, methods=['post'])
+    def add_color(self, request, pk=None):
+        """Add a new color variant to a product"""
+        product = get_object_or_404(Product, pk=pk)
+        
+        color_name = request.data.get('color_name')
+        color_code = request.data.get('color_code')
+        image_url = request.data.get('image_url')
+        
+        if not color_name:
+            return Response({'error': 'Color name is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            product.add_color(color_name, color_code, image_url)
+            return Response({
+                'message': f'Color "{color_name}" added successfully',
+                'available_colors': product.get_active_colors()
+            })
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @action(detail=True, methods=['post'])
+    def add_fabric(self, request, pk=None):
+        """Add a new fabric variant to a product"""
+        product = get_object_or_404(Product, pk=pk)
+        
+        fabric_name = request.data.get('fabric_name')
+        fabric_code = request.data.get('fabric_code')
+        sample_url = request.data.get('sample_url')
+        
+        if not fabric_name:
+            return Response({'error': 'Fabric name is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            product.add_fabric(fabric_name, fabric_code, sample_url)
+            return Response({
+                'message': f'Fabric "{fabric_name}" added successfully',
+                'available_fabrics': product.get_active_fabrics()
+            })
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @action(detail=True, methods=['post'])
+    def toggle_color(self, request, pk=None):
+        """Enable/disable a color variant"""
+        product = get_object_or_404(Product, pk=pk)
+        color_name = request.data.get('color_name')
+        
+        if not color_name:
+            return Response({'error': 'Color name is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        for color in product.available_colors:
+            if color.get('name') == color_name:
+                color['is_active'] = not color.get('is_active', True)
+                product.save()
+                status_text = 'enabled' if color['is_active'] else 'disabled'
+                return Response({
+                    'message': f'Color "{color_name}" {status_text}',
+                    'available_colors': product.get_active_colors()
+                })
+        
+        return Response({'error': 'Color not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=True, methods=['post'])
+    def toggle_fabric(self, request, pk=None):
+        """Enable/disable a fabric variant"""
+        product = get_object_or_404(Product, pk=pk)
+        fabric_name = request.data.get('fabric_name')
+        
+        if not fabric_name:
+            return Response({'error': 'Fabric name is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        for fabric in product.available_fabrics:
+            if fabric.get('name') == fabric_name:
+                fabric['is_active'] = not fabric.get('is_active', True)
+                product.save()
+                status_text = 'enabled' if fabric['is_active'] else 'disabled'
+                return Response({
+                    'message': f'Fabric "{fabric_name}" {status_text}',
+                    'available_fabrics': product.get_active_fabrics()
+                })
+        
+        return Response({'error': 'Fabric not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=False, methods=['get'])
+    def colors_and_fabrics(self, request):
+        """Get all available colors and fabrics across products"""
+        colors = set()
+        fabrics = set()
+        
+        for product in Product.objects.filter(is_active=True):
+            colors.update(product.get_active_colors())
+            fabrics.update(product.get_active_fabrics())
+        
+        return Response({
+            'available_colors': sorted(list(colors)),
+            'available_fabrics': sorted(list(fabrics))
+        })
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def quick_stock_entry(request):
-    """Enhanced quick stock entry with batch support"""
-    entries = request.data.get('entries', [])
+def create_product_with_options(request):
+    """Create a new product with colors and fabrics"""
+    user = request.user
     
-    if not entries:
-        return Response({'error': 'No entries provided'}, status=status.HTTP_400_BAD_REQUEST)
+    # Check permissions
+    if user.role not in ['owner', 'admin', 'warehouse']:
+        return Response({'error': 'Insufficient permissions'}, status=status.HTTP_403_FORBIDDEN)
     
-    created_movements = []
-    errors = []
-    
-    for i, entry_data in enumerate(entries):
-        try:
-            # Validate required fields
-            required_fields = ['material_id', 'movement_type', 'quantity']
-            for field in required_fields:
-                if field not in entry_data:
-                    errors.append(f"Entry {i+1}: Missing required field '{field}'")
-                    continue
-            
-            if errors:
-                continue
-                
-            material = Material.objects.get(id=entry_data['material_id'])
-            
-            # Create stock movement
-            movement_data = {
-                'material': material,
-                'movement_type': entry_data['movement_type'],  # 'in' or 'out'
-                'quantity': float(entry_data['quantity']),
-                'reason': entry_data.get('reason', ''),
-                'location': entry_data.get('location', ''),
-                'batch_number': entry_data.get('batch_number', ''),
-                'created_by': request.user
-            }
-            
-            # Set expiry date if provided
-            if entry_data.get('expiry_date'):
-                from django.utils.dateparse import parse_date
-                expiry_date = parse_date(entry_data['expiry_date'])
-                if expiry_date:
-                    movement_data['expiry_date'] = expiry_date
-            
-            movement = StockMovement.objects.create(**movement_data)
-            
-            # Update material stock
-            if entry_data['movement_type'] == 'in':
-                material.current_stock += movement_data['quantity']
-            else:  # 'out'
-                material.current_stock -= movement_data['quantity']
-                if material.current_stock < 0:
-                    material.current_stock = 0  # Prevent negative stock
-            
-            material.save()
-            
-            created_movements.append({
-                'movement_id': movement.id,
-                'material_name': material.name,
-                'movement_type': movement.movement_type,
-                'quantity': movement.quantity,
-                'new_stock_level': material.current_stock,
-                'status': 'success'
-            })
-            
-        except Material.DoesNotExist:
-            errors.append(f"Entry {i+1}: Material with ID {entry_data.get('material_id')} not found")
-        except ValueError as e:
-            errors.append(f"Entry {i+1}: Invalid quantity value")
-        except Exception as e:
-            errors.append(f"Entry {i+1}: {str(e)}")
-    
-    response_data = {
-        'message': f'{len(created_movements)} stock movements created',
-        'movements': created_movements,
-        'success_count': len(created_movements),
-        'error_count': len(errors)
-    }
-    
-    if errors:
-        response_data['errors'] = errors
-    
-    return Response(response_data)
+    try:
+        # Extract product data
+        product_data = {
+            'product_name': request.data.get('product_name'),
+            'description': request.data.get('description', ''),
+            'category': request.data.get('category', ''),
+            'product_type': request.data.get('product_type', 'furniture'),
+            'unit_cost': request.data.get('unit_cost', 0),
+            'unit_price': request.data.get('unit_price', 0),
+            'estimated_build_time': request.data.get('estimated_build_time', 1),
+            'production_time_days': request.data.get('production_time_days', 1),
+            'default_quantity_unit': request.data.get('default_quantity_unit', 'pieces'),
+            'stock': request.data.get('stock', 0),
+            'available_for_order': request.data.get('available_for_order', True),
+            'is_active': True
+        }
+        
+        # Validate required fields
+        if not product_data['product_name']:
+            return Response({'error': 'Product name is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not product_data['unit_cost'] or not product_data['unit_price']:
+            return Response({'error': 'Unit cost and price are required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create product
+        product = Product.objects.create(**product_data)
+        
+        # Add colors if provided
+        colors = request.data.get('colors', [])
+        for color in colors:
+            if isinstance(color, str):
+                product.add_color(color)
+            elif isinstance(color, dict):
+                product.add_color(
+                    color.get('name'),
+                    color.get('code'),
+                    color.get('image_url')
+                )
+        
+        # Add fabrics if provided
+        fabrics = request.data.get('fabrics', [])
+        for fabric in fabrics:
+            if isinstance(fabric, str):
+                product.add_fabric(fabric)
+            elif isinstance(fabric, dict):
+                product.add_fabric(
+                    fabric.get('name'),
+                    fabric.get('code'),
+                    fabric.get('sample_url')
+                )
+        
+        return Response({
+            'message': 'Product created successfully',
+            'product_id': product.id,
+            'product_name': product.product_name,
+            'available_colors': product.get_active_colors(),
+            'available_fabrics': product.get_active_fabrics()
+        }, status=status.HTTP_201_CREATED)
+        
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

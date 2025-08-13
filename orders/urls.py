@@ -38,6 +38,8 @@ urlpatterns = [
     path('orders/<int:pk>/assign/', views.OrderViewSet.as_view({'post': 'assign_order'}), name='assign_order'),
     path('orders/<int:pk>/cancel/', views.OrderViewSet.as_view({'post': 'cancel_order'}), name='cancel_order'),
     path('orders/<int:pk>/update_status/', views.OrderViewSet.as_view({'patch': 'update_status'}), name='update_order_status'),
+    path('orders/<int:pk>/update_production_status/', views.OrderViewSet.as_view({'post': 'update_production_status'}), name='update_production_status'),
+    path('orders/warehouse_analytics/', views.OrderViewSet.as_view({'get': 'warehouse_analytics'}), name='warehouse_analytics'),
     
     # Role-based dashboard endpoints
     path('orders/owner_dashboard/', views.OrderViewSet.as_view({'get': 'owner_dashboard_orders'}), name='owner_dashboard_orders'),

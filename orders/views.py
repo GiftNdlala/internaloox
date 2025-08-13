@@ -196,6 +196,7 @@ class OrderViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['patch'])
     def update_status(self, request, pk=None):
         """Update order status with role-based permissions"""
+        try:
         order = self.get_object()
         user = request.user
         
@@ -265,6 +266,89 @@ class OrderViewSet(viewsets.ModelViewSet):
             })
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+        except Exception as e:
+            import traceback
+            print(f"Status update error: {str(e)}")
+            print(f"Traceback: {traceback.format_exc()}")
+            return Response({
+                'error': f'Status update failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'])
+    def update_production_status(self, request, pk=None):
+        """Update production status specifically for warehouse operations"""
+        try:
+            order = self.get_object()
+            user = request.user
+            
+            # Check if user has permission to update production status
+            if user.role not in ['owner', 'admin', 'warehouse', 'warehouse_worker']:
+                return Response({
+                    'error': 'Permission denied: Only warehouse staff can update production status'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            new_production_status = request.data.get('production_status')
+            if not new_production_status:
+                return Response({
+                    'error': 'Production status is required'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Validate production status
+            valid_statuses = [choice[0] for choice in Order.PRODUCTION_STATUS_CHOICES]
+            if new_production_status not in valid_statuses:
+                return Response({
+                    'error': f'Invalid production status: {new_production_status}. Valid statuses: {", ".join(valid_statuses)}'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Store old value for logging
+            old_production_status = order.production_status
+            
+            # Update production status
+            order.production_status = new_production_status
+            
+            # Special handling for completed status
+            if new_production_status == 'completed':
+                order.order_status = 'order_ready'
+                # Set expected delivery date if not already set
+                if not order.expected_delivery_date:
+                    from datetime import date, timedelta
+                    order.expected_delivery_date = date.today() + timedelta(days=3)
+            
+            # Special handling for ready_for_delivery status
+            elif new_production_status == 'ready_for_delivery':
+                order.order_status = 'order_ready'
+            
+            order.save()
+            
+            # Create history entry
+            changes = [f"Production status: {old_production_status} → {new_production_status}"]
+            if order.order_status != old_production_status:
+                changes.append(f"Order status: {order.order_status}")
+            
+            OrderHistory.objects.create(
+                order=order,
+                user=user,
+                action="Production status updated",
+                details="; ".join(changes)
+            )
+            
+            return Response({
+                'message': 'Production status updated successfully',
+                'order_number': order.order_number,
+                'production_status': order.production_status,
+                'order_status': order.order_status,
+                'updated_by': user.get_full_name() or user.username,
+                'changes': changes
+            })
+            
+        except Exception as e:
+            import traceback
+            print(f"Production status update error: {str(e)}")
+            print(f"Traceback: {traceback.format_exc()}")
+            return Response({
+                'error': f'Production status update failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def _can_update_order_status(self, user, order, new_status):
         """Check if user can update order status"""
@@ -1107,6 +1191,247 @@ class OrderViewSet(viewsets.ModelViewSet):
             'reason': reason
         })
 
+    @action(detail=False, methods=['get'])
+    def admin_warehouse_overview(self, request):
+        """Admin warehouse overview with enhanced error handling"""
+        try:
+            user = request.user
+            
+            # Check permissions
+            if user.role not in ['owner', 'admin']:
+                return Response({
+                    'error': 'Access denied. Only owners and admins can view warehouse overview.'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            # Get warehouse statistics with robust error handling
+            try:
+                from tasks.models import Task
+                active_tasks = Task.objects.filter(status='in_progress').count()
+            except ImportError:
+                active_tasks = 0
+            
+            try:
+                from users.models import User
+                active_workers = User.objects.filter(
+                    role__in=['warehouse_worker', 'warehouse'],
+                    is_active=True
+                ).count()
+            except ImportError:
+                active_workers = 0
+            
+            try:
+                from inventory.models import Material
+                low_stock_materials = Material.objects.filter(
+                    current_stock__lte=F('minimum_stock')
+                ).count()
+            except ImportError:
+                low_stock_materials = 0
+            
+            # Get order statistics
+            total_orders = Order.objects.count()
+            orders_in_production = Order.objects.filter(
+                production_status__in=['cutting', 'sewing', 'finishing']
+            ).count()
+            orders_ready = Order.objects.filter(
+                production_status='completed',
+                order_status='order_ready'
+            ).count()
+            
+            # Get recent activity
+            recent_orders = Order.objects.filter(
+                created_at__gte=timezone.now() - timedelta(days=7)
+            ).count()
+            
+            # Calculate completion rate
+            completed_orders = Order.objects.filter(
+                production_status='completed'
+            ).count()
+            completion_rate = (completed_orders / total_orders * 100) if total_orders > 0 else 0
+            
+            return Response({
+                'total_orders': total_orders,
+                'orders_in_production': orders_in_production,
+                'orders_ready': orders_ready,
+                'active_tasks': active_tasks,
+                'active_workers': active_workers,
+                'low_stock_materials': low_stock_materials,
+                'recent_orders': recent_orders,
+                'completion_rate': round(completion_rate, 1)
+            })
+            
+        except Exception as e:
+            return Response({
+                'error': f'Failed to fetch warehouse overview: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @action(detail=False, methods=['get'])
+    def warehouse_analytics(self, request):
+        """Comprehensive warehouse analytics for warehouse managers"""
+        try:
+            user = request.user
+            
+            # Check permissions
+            if user.role not in ['owner', 'admin', 'warehouse']:
+                return Response({
+                    'error': 'Access denied. Insufficient permissions for warehouse analytics.'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            # Get current date and time
+            now = timezone.now()
+            today = now.date()
+            week_ago = today - timedelta(days=7)
+            month_ago = today - timedelta(days=30)
+            
+            # Stock Analytics
+            try:
+                from inventory.models import Material, StockMovement
+                
+                # Current stock levels
+                total_materials = Material.objects.count()
+                low_stock_count = Material.objects.filter(
+                    current_stock__lte=F('minimum_stock')
+                ).count()
+                critical_stock_count = Material.objects.filter(
+                    current_stock__lte=F('minimum_stock') * 0.5
+                ).count()
+                
+                # Stock movements
+                stock_in_week = StockMovement.objects.filter(
+                    movement_type='in',
+                    created_at__gte=week_ago
+                ).aggregate(total=Sum('quantity'))['total'] or 0
+                
+                stock_out_week = StockMovement.objects.filter(
+                    movement_type='out',
+                    created_at__gte=week_ago
+                ).aggregate(total=Sum('quantity'))['total'] or 0
+                
+                stock_in_month = StockMovement.objects.filter(
+                    movement_type='in',
+                    created_at__gte=month_ago
+                ).aggregate(total=Sum('quantity'))['total'] or 0
+                
+                stock_out_month = StockMovement.objects.filter(
+                    movement_type='out',
+                    created_at__gte=month_ago
+                ).aggregate(total=Sum('quantity'))['total'] or 0
+                
+            except ImportError:
+                total_materials = 0
+                low_stock_count = 0
+                critical_stock_count = 0
+                stock_in_week = 0
+                stock_out_week = 0
+                stock_in_month = 0
+                stock_out_month = 0
+            
+            # Task Analytics
+            try:
+                from tasks.models import Task
+                
+                total_tasks = Task.objects.count()
+                tasks_in_progress = Task.objects.filter(status='in_progress').count()
+                tasks_completed_week = Task.objects.filter(
+                    status='completed',
+                    completed_at__gte=week_ago
+                ).count()
+                tasks_completed_month = Task.objects.filter(
+                    status='completed',
+                    completed_at__gte=month_ago
+                ).count()
+                
+                # Worker performance
+                worker_tasks = Task.objects.filter(
+                    assigned_to__isnull=False,
+                    completed_at__gte=week_ago
+                ).values('assigned_to__username').annotate(
+                    completed_count=Count('id')
+                ).order_by('-completed_count')[:5]
+                
+            except ImportError:
+                total_tasks = 0
+                tasks_in_progress = 0
+                tasks_completed_week = 0
+                tasks_completed_month = 0
+                worker_tasks = []
+            
+            # Order Analytics
+            orders_total = Order.objects.count()
+            orders_week = Order.objects.filter(created_at__gte=week_ago).count()
+            orders_month = Order.objects.filter(created_at__gte=month_ago).count()
+            
+            # Production status breakdown
+            production_statuses = Order.objects.values('production_status').annotate(
+                count=Count('id')
+            ).order_by('production_status')
+            
+            # Payment analytics
+            payment_statuses = Order.objects.values('payment_status').annotate(
+                count=Count('id')
+            ).order_by('payment_status')
+            
+            # Revenue analytics (if payment amounts are available)
+            total_revenue = Order.objects.filter(
+                payment_status='fully_paid'
+            ).aggregate(
+                total=Sum('total_amount')
+            )['total'] or 0
+            
+            weekly_revenue = Order.objects.filter(
+                payment_status='fully_paid',
+                updated_at__gte=week_ago
+            ).aggregate(
+                total=Sum('total_amount')
+            )['total'] or 0
+            
+            monthly_revenue = Order.objects.filter(
+                payment_status='fully_paid',
+                updated_at__gte=month_ago
+            ).aggregate(
+                total=Sum('total_amount')
+            )['total'] or 0
+            
+            return Response({
+                'stock_analytics': {
+                    'total_materials': total_materials,
+                    'low_stock_count': low_stock_count,
+                    'critical_stock_count': critical_stock_count,
+                    'stock_in_week': float(stock_in_week),
+                    'stock_out_week': float(stock_out_week),
+                    'stock_in_month': float(stock_in_month),
+                    'stock_out_month': float(stock_out_month)
+                },
+                'task_analytics': {
+                    'total_tasks': total_tasks,
+                    'tasks_in_progress': tasks_in_progress,
+                    'tasks_completed_week': tasks_completed_week,
+                    'tasks_completed_month': tasks_completed_month,
+                    'top_workers': worker_tasks
+                },
+                'order_analytics': {
+                    'total_orders': orders_total,
+                    'orders_week': orders_week,
+                    'orders_month': orders_month,
+                    'production_statuses': list(production_statuses),
+                    'payment_statuses': list(payment_statuses)
+                },
+                'revenue_analytics': {
+                    'total_revenue': float(total_revenue),
+                    'weekly_revenue': float(weekly_revenue),
+                    'monthly_revenue': float(monthly_revenue)
+                },
+                'timeline': {
+                    'current_date': today.isoformat(),
+                    'week_ago': week_ago.isoformat(),
+                    'month_ago': month_ago.isoformat()
+                }
+            })
+            
+        except Exception as e:
+            return Response({
+                'error': f'Failed to fetch warehouse analytics: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 class PaymentProofViewSet(viewsets.ModelViewSet):
     queryset = PaymentProof.objects.all()
     serializer_class = PaymentProofSerializer
@@ -1671,6 +1996,7 @@ def dashboard_stats(request):
     @action(detail=True, methods=['patch'])
     def update_payment(self, request, pk=None):
         """Update payment information for an order"""
+        try:
         order = self.get_object()
         user = request.user
         
@@ -1680,11 +2006,27 @@ def dashboard_stats(request):
                 'error': 'Permission denied: Only Owner and Admin can update payments'
             }, status=status.HTTP_403_FORBIDDEN)
         
-        # Extract payment data
+            # Extract payment data with proper type conversion
         total_amount = request.data.get('total_amount')
         deposit_amount = request.data.get('deposit_amount') 
         balance_amount = request.data.get('balance_amount')
         payment_status = request.data.get('payment_status')
+            payment_method = request.data.get('payment_method', '')
+            payment_notes = request.data.get('payment_notes', '')
+            
+            # Convert string amounts to Decimal if provided
+            from decimal import Decimal, InvalidOperation
+            try:
+                if total_amount is not None:
+                    total_amount = Decimal(str(total_amount))
+                if deposit_amount is not None:
+                    deposit_amount = Decimal(str(deposit_amount))
+                if balance_amount is not None:
+                    balance_amount = Decimal(str(balance_amount))
+            except (InvalidOperation, ValueError) as e:
+                return Response({
+                    'error': f'Invalid amount format: {str(e)}'
+                }, status=status.HTTP_400_BAD_REQUEST)
         
         # Store old values for logging
         old_values = {
@@ -1709,6 +2051,13 @@ def dashboard_stats(request):
             changes.append(f"Balance amount: R{old_values['balance_amount']} → R{balance_amount}")
         
         if payment_status is not None:
+                # Validate payment status
+                valid_statuses = [choice[0] for choice in Order.PAYMENT_STATUS_CHOICES]
+                if payment_status not in valid_statuses:
+                    return Response({
+                        'error': f'Invalid payment status: {payment_status}. Valid statuses: {", ".join(valid_statuses)}'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
             order.payment_status = payment_status
             changes.append(f"Payment status: {old_values['payment_status']} → {payment_status}")
             
@@ -1719,6 +2068,28 @@ def dashboard_stats(request):
                 order.order_status = 'deposit_paid'
                 changes.append("Activated production queue (deposit paid)")
         
+            # Update additional payment fields if provided
+            if payment_method:
+                order.payment_method = payment_method
+                changes.append(f"Payment method: {payment_method}")
+            
+            if payment_notes:
+                order.payment_notes = payment_notes
+                changes.append("Payment notes updated")
+            
+            # Validate that amounts make sense
+            if total_amount is not None and deposit_amount is not None:
+                if deposit_amount > total_amount:
+                    return Response({
+                        'error': 'Deposit amount cannot be greater than total amount'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            
+            if balance_amount is not None and total_amount is not None:
+                if balance_amount > total_amount:
+                    return Response({
+                        'error': 'Balance amount cannot be greater than total amount'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            
         order.save()
         
         # Log the payment update
@@ -1739,6 +2110,14 @@ def dashboard_stats(request):
             'payment_status': order.payment_status,
             'changes': changes
         })
+            
+        except Exception as e:
+            import traceback
+            print(f"Payment update error: {str(e)}")
+            print(f"Traceback: {traceback.format_exc()}")
+            return Response({
+                'error': f'Payment update failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['get'])
     def payments_dashboard(self, request):
@@ -1881,6 +2260,7 @@ def dashboard_stats(request):
     @action(detail=False, methods=['get'])
     def admin_warehouse_overview(self, request):
         """Read-only warehouse overview for admin dashboard"""
+        try:
         user = request.user
         
         # Check permissions - only admin and owner can access
@@ -1906,6 +2286,7 @@ def dashboard_stats(request):
         }
         
         # Get active tasks from warehouse
+            try:
         from tasks.models import Task
         active_tasks = Task.objects.filter(
             status__in=['pending', 'in_progress', 'paused'],
@@ -1918,8 +2299,17 @@ def dashboard_stats(request):
             'in_progress_tasks': active_tasks.filter(status='in_progress').count(),
             'paused_tasks': active_tasks.filter(status='paused').count()
         }
+            except ImportError:
+                # Tasks app not available
+                task_stats = {
+                    'total_active_tasks': 0,
+                    'pending_tasks': 0,
+                    'in_progress_tasks': 0,
+                    'paused_tasks': 0
+                }
         
         # Warehouse workforce
+            try:
         from users.models import User
         warehouse_workers = User.objects.filter(
             role__in=['warehouse_worker', 'warehouse'],
@@ -1932,13 +2322,21 @@ def dashboard_stats(request):
             'workers': warehouse_workers.filter(role__in=['warehouse_worker', 'warehouse']).count(),
             'active_workers': warehouse_workers.filter(
                 id__in=active_tasks.values('assigned_to').distinct()
-            ).count()
+                    ).count() if 'active_tasks' in locals() else 0
+                }
+            except ImportError:
+                workforce_stats = {
+                    'total_workers': 0,
+                    'managers': 0,
+                    'workers': 0,
+                    'active_workers': 0
         }
         
         # Stock alerts (if inventory system exists)
         stock_alerts = []
         try:
             from inventory.models import Material
+                from django.db.models import F
             low_stock_materials = Material.objects.filter(
                 current_stock__lte=F('minimum_stock_level')
             )[:10]

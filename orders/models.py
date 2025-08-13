@@ -46,6 +46,12 @@ class Product(models.Model):
     date_added = models.DateTimeField(blank=True, null=True)
     attributes = models.JSONField(null=True, blank=True, default=dict)
     
+    # Enhanced color and fabric support
+    available_colors = models.JSONField(default=list, blank=True, help_text="List of available colors for this product")
+    available_fabrics = models.JSONField(default=list, blank=True, help_text="List of available fabrics for this product")
+    color_images = models.JSONField(default=dict, blank=True, help_text="Image URLs for each color variant")
+    fabric_samples = models.JSONField(default=dict, blank=True, help_text="Sample images for each fabric type")
+    
     class Meta:
         db_table = 'orders_product'
         ordering = ['-created_at']
@@ -71,6 +77,60 @@ class Product(models.Model):
     def stock_quantity(self):
         """Return stock field"""
         return self.stock or 0
+    
+    def add_color(self, color_name, color_code=None, image_url=None):
+        """Add a new color variant to the product"""
+        if not self.available_colors:
+            self.available_colors = []
+        
+        color_data = {
+            'name': color_name,
+            'code': color_code or color_name.lower().replace(' ', '_'),
+            'is_active': True
+        }
+        
+        if color_name not in [c.get('name') for c in self.available_colors]:
+            self.available_colors.append(color_data)
+            
+        if image_url and not self.color_images:
+            self.color_images = {}
+        if image_url:
+            self.color_images[color_name] = image_url
+            
+        self.save()
+    
+    def add_fabric(self, fabric_name, fabric_code=None, sample_url=None):
+        """Add a new fabric variant to the product"""
+        if not self.available_fabrics:
+            self.available_fabrics = []
+        
+        fabric_data = {
+            'name': fabric_name,
+            'code': fabric_code or fabric_name.lower().replace(' ', '_'),
+            'is_active': True
+        }
+        
+        if fabric_name not in [f.get('name') for f in self.available_fabrics]:
+            self.available_fabrics.append(fabric_data)
+            
+        if sample_url and not self.fabric_samples:
+            self.fabric_samples = {}
+        if sample_url:
+            self.fabric_samples[fabric_name] = sample_url
+            
+        self.save()
+    
+    def get_active_colors(self):
+        """Get list of active color names"""
+        if not self.available_colors:
+            return []
+        return [color['name'] for color in self.available_colors if color.get('is_active', True)]
+    
+    def get_active_fabrics(self):
+        """Get list of active fabric names"""
+        if not self.available_fabrics:
+            return []
+        return [fabric['name'] for fabric in self.available_fabrics if fabric.get('is_active', True)]
 
 class ProductOption(models.Model):
     OPTION_TYPE_CHOICES = [
@@ -131,6 +191,8 @@ class Order(models.Model):
     deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     balance_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='deposit_only')
+    payment_method = models.CharField(max_length=50, blank=True, null=True, help_text="Payment method used")
+    payment_notes = models.TextField(blank=True, null=True, help_text="Additional payment notes")
     order_status = models.CharField(max_length=20, choices=ORDER_STATUS_CHOICES, default='pending')
     
     # MVP Production Tracking
