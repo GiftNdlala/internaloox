@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Order, Customer, PaymentProof, OrderHistory, Product, Color, Fabric, OrderItem, ColorReference, FabricReference
+from .models import Order, Customer, PaymentProof, PaymentTransaction, OrderHistory, Product, Color, Fabric, OrderItem, ColorReference, FabricReference
 from users.serializers import UserSerializer
 from decimal import Decimal
 
@@ -16,6 +16,22 @@ class PaymentProofSerializer(serializers.ModelSerializer):
         model = PaymentProof
         fields = '__all__'
         read_only_fields = ['uploaded_by', 'uploaded_at']
+
+
+class PaymentTransactionSerializer(serializers.ModelSerializer):
+    actor_user = UserSerializer(read_only=True)
+    order_number = serializers.CharField(source='order.order_number', read_only=True)
+    proof = PaymentProofSerializer(read_only=True)
+    
+    class Meta:
+        model = PaymentTransaction
+        fields = [
+            'id', 'order', 'order_number', 'actor_user',
+            'total_amount_delta', 'deposit_delta', 'balance_delta',
+            'amount_delta', 'previous_balance', 'new_balance',
+            'payment_method', 'payment_status', 'proof', 'notes', 'created_at'
+        ]
+        read_only_fields = fields
 
 class OrderHistorySerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)

@@ -197,75 +197,74 @@ class OrderViewSet(viewsets.ModelViewSet):
     def update_status(self, request, pk=None):
         """Update order status with role-based permissions"""
         try:
-        order = self.get_object()
-        user = request.user
-        
-        # Define what statuses each role can change
-        role_permissions = {
-            'owner': ['all'],  # Owner can change to any status
-            'admin': ['all'],  # Admin can change to any status
-            'warehouse_manager': ['production_status', 'order_status_limited'],
-            'warehouse_worker': ['production_status_limited'],
-            'warehouse': ['production_status_limited'],
-            'delivery': ['order_status_delivery']
-        }
-        
-        new_order_status = request.data.get('order_status')
-        new_production_status = request.data.get('production_status')
-        
-        # Check permissions based on what's being updated
-        if new_order_status:
-            if not self._can_update_order_status(user, order, new_order_status):
+            order = self.get_object()
+            user = request.user
+            
+            # Define what statuses each role can change
+            role_permissions = {
+                'owner': ['all'],  # Owner can change to any status
+                'admin': ['all'],  # Admin can change to any status
+                'warehouse': ['production_status', 'order_status_limited'],
+                'warehouse_worker': ['production_status_limited'],
+                'delivery': ['order_status_delivery']
+            }
+            
+            new_order_status = request.data.get('order_status')
+            new_production_status = request.data.get('production_status')
+            
+            # Check permissions based on what's being updated
+            if new_order_status:
+                if not self._can_update_order_status(user, order, new_order_status):
+                    return Response({
+                        'error': f'Permission denied: {user.role} cannot change order status to {new_order_status}',
+                        'your_role': user.role,
+                        'current_status': order.order_status,
+                        'requested_status': new_order_status
+                    }, status=status.HTTP_403_FORBIDDEN)
+            
+            if new_production_status:
+                if not self._can_update_production_status(user, order, new_production_status):
+                    return Response({
+                        'error': f'Permission denied: {user.role} cannot change production status to {new_production_status}',
+                        'your_role': user.role,
+                        'current_status': order.production_status,
+                        'requested_status': new_production_status
+                    }, status=status.HTTP_403_FORBIDDEN)
+            
+            # Update the order with validation
+            serializer = OrderStatusUpdateSerializer(order, data=request.data, partial=True, context={'request': request})
+            
+            if serializer.is_valid():
+                # Log the status change
+                old_order_status = order.order_status
+                old_production_status = order.production_status
+                
+                serializer.save()
+                
+                # Create history entry
+                changes = []
+                if new_order_status and new_order_status != old_order_status:
+                    changes.append(f"Order status: {old_order_status} → {new_order_status}")
+                if new_production_status and new_production_status != old_production_status:
+                    changes.append(f"Production status: {old_production_status} → {new_production_status}")
+                
+                if changes:
+                    OrderHistory.objects.create(
+                        order=order,
+                        user=user,
+                        action="Status updated",
+                        details="; ".join(changes)
+                    )
+                
                 return Response({
-                    'error': f'Permission denied: {user.role} cannot change order status to {new_order_status}',
-                    'your_role': user.role,
-                    'current_status': order.order_status,
-                    'requested_status': new_order_status
-                }, status=status.HTTP_403_FORBIDDEN)
-        
-        if new_production_status:
-            if not self._can_update_production_status(user, order, new_production_status):
-                return Response({
-                    'error': f'Permission denied: {user.role} cannot change production status to {new_production_status}',
-                    'your_role': user.role,
-                    'current_status': order.production_status,
-                    'requested_status': new_production_status
-                }, status=status.HTTP_403_FORBIDDEN)
-        
-        # Update the order with validation
-        serializer = OrderStatusUpdateSerializer(order, data=request.data, partial=True, context={'request': request})
-        
-        if serializer.is_valid():
-            # Log the status change
-            old_order_status = order.order_status
-            old_production_status = order.production_status
+                    'message': 'Order status updated successfully',
+                    'order_status': order.order_status,
+                    'production_status': order.production_status,
+                    'updated_by': user.get_full_name() or user.username,
+                    'changes': changes
+                })
             
-            serializer.save()
-            
-            # Create history entry
-            changes = []
-            if new_order_status and new_order_status != old_order_status:
-                changes.append(f"Order status: {old_order_status} → {new_order_status}")
-            if new_production_status and new_production_status != old_production_status:
-                changes.append(f"Production status: {old_production_status} → {new_production_status}")
-            
-            if changes:
-                OrderHistory.objects.create(
-                    order=order,
-                    user=user,
-                    action="Status updated",
-                    details="; ".join(changes)
-                )
-            
-            return Response({
-                'message': 'Order status updated successfully',
-                'order_status': order.order_status,
-                'production_status': order.production_status,
-                'updated_by': user.get_full_name() or user.username,
-                'changes': changes
-            })
-        
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
             
         except Exception as e:
             import traceback
@@ -1193,826 +1192,191 @@ class OrderViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def admin_warehouse_overview(self, request):
-        """Admin warehouse overview with enhanced error handling"""
+        """Read-only warehouse overview for admin dashboard"""
         try:
             user = request.user
             
-            # Check permissions
-            if user.role not in ['owner', 'admin']:
+            # Check permissions - only admin and owner can access
+            if user.role not in ['admin', 'owner']:
                 return Response({
-                    'error': 'Access denied. Only owners and admins can view warehouse overview.'
+                    'error': 'Permission denied: Only Admin and Owner can view warehouse overview'
                 }, status=status.HTTP_403_FORBIDDEN)
             
-            # Get warehouse statistics with robust error handling
-            try:
-                from tasks.models import Task
-                active_tasks = Task.objects.filter(status='in_progress').count()
-            except ImportError:
-                active_tasks = 0
-            
-            try:
-                from users.models import User
-                active_workers = User.objects.filter(
-                    role__in=['warehouse_worker', 'warehouse'],
-                    is_active=True
-                ).count()
-            except ImportError:
-                active_workers = 0
-            
-            try:
-                from inventory.models import Material
-                low_stock_materials = Material.objects.filter(
-                    current_stock__lte=F('minimum_stock')
-                ).count()
-            except ImportError:
-                low_stock_materials = 0
-            
-            # Get order statistics
-            total_orders = Order.objects.count()
-            orders_in_production = Order.objects.filter(
-                production_status__in=['cutting', 'sewing', 'finishing']
-            ).count()
-            orders_ready = Order.objects.filter(
-                production_status='completed',
-                order_status='order_ready'
-            ).count()
-            
-            # Get recent activity
-            recent_orders = Order.objects.filter(
-                created_at__gte=timezone.now() - timedelta(days=7)
-            ).count()
-            
-            # Calculate completion rate
-            completed_orders = Order.objects.filter(
-                production_status='completed'
-            ).count()
-            completion_rate = (completed_orders / total_orders * 100) if total_orders > 0 else 0
-            
-            return Response({
-                'total_orders': total_orders,
-                'orders_in_production': orders_in_production,
-                'orders_ready': orders_ready,
-                'active_tasks': active_tasks,
-                'active_workers': active_workers,
-                'low_stock_materials': low_stock_materials,
-                'recent_orders': recent_orders,
-                'completion_rate': round(completion_rate, 1)
-            })
-            
-        except Exception as e:
-            return Response({
-                'error': f'Failed to fetch warehouse overview: {str(e)}'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
-    @action(detail=False, methods=['get'])
-    def warehouse_analytics(self, request):
-        """Comprehensive warehouse analytics for warehouse managers"""
-        try:
-            user = request.user
-            
-            # Check permissions
-            if user.role not in ['owner', 'admin', 'warehouse']:
-                return Response({
-                    'error': 'Access denied. Insufficient permissions for warehouse analytics.'
-                }, status=status.HTTP_403_FORBIDDEN)
-            
-            # Get current date and time
-            now = timezone.now()
-            today = now.date()
-            week_ago = today - timedelta(days=7)
-            month_ago = today - timedelta(days=30)
-            
-            # Stock Analytics
-            try:
-                from inventory.models import Material, StockMovement
-                
-                # Current stock levels
-                total_materials = Material.objects.count()
-                low_stock_count = Material.objects.filter(
-                    current_stock__lte=F('minimum_stock')
-                ).count()
-                critical_stock_count = Material.objects.filter(
-                    current_stock__lte=F('minimum_stock') * 0.5
-                ).count()
-                
-                # Stock movements
-                stock_in_week = StockMovement.objects.filter(
-                    movement_type='in',
-                    created_at__gte=week_ago
-                ).aggregate(total=Sum('quantity'))['total'] or 0
-                
-                stock_out_week = StockMovement.objects.filter(
-                    movement_type='out',
-                    created_at__gte=week_ago
-                ).aggregate(total=Sum('quantity'))['total'] or 0
-                
-                stock_in_month = StockMovement.objects.filter(
-                    movement_type='in',
-                    created_at__gte=month_ago
-                ).aggregate(total=Sum('quantity'))['total'] or 0
-                
-                stock_out_month = StockMovement.objects.filter(
-                    movement_type='out',
-                    created_at__gte=month_ago
-                ).aggregate(total=Sum('quantity'))['total'] or 0
-                
-            except ImportError:
-                total_materials = 0
-                low_stock_count = 0
-                critical_stock_count = 0
-                stock_in_week = 0
-                stock_out_week = 0
-                stock_in_month = 0
-                stock_out_month = 0
-            
-            # Task Analytics
-            try:
-                from tasks.models import Task
-                
-                total_tasks = Task.objects.count()
-                tasks_in_progress = Task.objects.filter(status='in_progress').count()
-                tasks_completed_week = Task.objects.filter(
-                    status='completed',
-                    completed_at__gte=week_ago
-                ).count()
-                tasks_completed_month = Task.objects.filter(
-                    status='completed',
-                    completed_at__gte=month_ago
-                ).count()
-                
-                # Worker performance
-                worker_tasks = Task.objects.filter(
-                    assigned_to__isnull=False,
-                    completed_at__gte=week_ago
-                ).values('assigned_to__username').annotate(
-                    completed_count=Count('id')
-                ).order_by('-completed_count')[:5]
-                
-            except ImportError:
-                total_tasks = 0
-                tasks_in_progress = 0
-                tasks_completed_week = 0
-                tasks_completed_month = 0
-                worker_tasks = []
-            
-            # Order Analytics
-            orders_total = Order.objects.count()
-            orders_week = Order.objects.filter(created_at__gte=week_ago).count()
-            orders_month = Order.objects.filter(created_at__gte=month_ago).count()
-            
-            # Production status breakdown
-            production_statuses = Order.objects.values('production_status').annotate(
-                count=Count('id')
-            ).order_by('production_status')
-            
-            # Payment analytics
-            payment_statuses = Order.objects.values('payment_status').annotate(
-                count=Count('id')
-            ).order_by('payment_status')
-            
-            # Revenue analytics (if payment amounts are available)
-            total_revenue = Order.objects.filter(
-                payment_status='fully_paid'
-            ).aggregate(
-                total=Sum('total_amount')
-            )['total'] or 0
-            
-            weekly_revenue = Order.objects.filter(
-                payment_status='fully_paid',
-                updated_at__gte=week_ago
-            ).aggregate(
-                total=Sum('total_amount')
-            )['total'] or 0
-            
-            monthly_revenue = Order.objects.filter(
-                payment_status='fully_paid',
-                updated_at__gte=month_ago
-            ).aggregate(
-                total=Sum('total_amount')
-            )['total'] or 0
-            
-            return Response({
-                'stock_analytics': {
-                    'total_materials': total_materials,
-                    'low_stock_count': low_stock_count,
-                    'critical_stock_count': critical_stock_count,
-                    'stock_in_week': float(stock_in_week),
-                    'stock_out_week': float(stock_out_week),
-                    'stock_in_month': float(stock_in_month),
-                    'stock_out_month': float(stock_out_month)
-                },
-                'task_analytics': {
-                    'total_tasks': total_tasks,
-                    'tasks_in_progress': tasks_in_progress,
-                    'tasks_completed_week': tasks_completed_week,
-                    'tasks_completed_month': tasks_completed_month,
-                    'top_workers': worker_tasks
-                },
-                'order_analytics': {
-                    'total_orders': orders_total,
-                    'orders_week': orders_week,
-                    'orders_month': orders_month,
-                    'production_statuses': list(production_statuses),
-                    'payment_statuses': list(payment_statuses)
-                },
-                'revenue_analytics': {
-                    'total_revenue': float(total_revenue),
-                    'weekly_revenue': float(weekly_revenue),
-                    'monthly_revenue': float(monthly_revenue)
-                },
-                'timeline': {
-                    'current_date': today.isoformat(),
-                    'week_ago': week_ago.isoformat(),
-                    'month_ago': month_ago.isoformat()
-                }
-            })
-            
-        except Exception as e:
-            return Response({
-                'error': f'Failed to fetch warehouse analytics: {str(e)}'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-class PaymentProofViewSet(viewsets.ModelViewSet):
-    queryset = PaymentProof.objects.all()
-    serializer_class = PaymentProofSerializer
-    permission_classes = [IsAuthenticated]
-    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    filterset_fields = ['order', 'payment_type']
-    ordering = ['-uploaded_at']
-
-    def list(self, request, *args, **kwargs):
-        if not PaymentProof.objects.exists():
-            # Return mock data for frontend testing
-            mock_data = [
-                {
-                    'id': 1,
-                    'order': 1,
-                    'payment_type': 'deposit',
-                    'amount': 'R50000.00',
-                    'payment_date': '2024-07-01',
-                    'reference_number': 'REF123',
-                    'notes': '',
-                    'uploaded_by': None,
-                    'uploaded_at': '2024-07-01T12:00:00Z',
-                }
-            ]
-            return Response(mock_data)
-        return super().list(request, *args, **kwargs)
-
-    def perform_create(self, serializer):
-        serializer.save(uploaded_by=self.request.user)
-
-class OrderHistoryViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = OrderHistory.objects.all()
-    serializer_class = OrderHistorySerializer
-    permission_classes = [IsAuthenticated]
-    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    filterset_fields = ['order', 'user', 'action']
-    ordering = ['-timestamp']
-
-class ProductViewSet(viewsets.ModelViewSet):
-    queryset = Product.objects.all()
-    serializer_class = ProductSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly, CanCreateProducts]
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['product_name', 'name', 'description', 'model_code']
-    ordering_fields = ['created_at', 'product_name', 'unit_price', 'stock']
-    ordering = ['-created_at']
-
-    # Remove mock data logic - use real database data
-
-    def perform_create(self, serializer):
-        # Remove created_by field since it doesn't exist in simplified Product model
-        serializer.save()
-    
-    def list(self, request, *args, **kwargs):
-        """Override list to add error handling"""
-        try:
-            return super().list(request, *args, **kwargs)
-        except Exception as e:
-            from rest_framework.response import Response
-            from rest_framework import status
-            import traceback
-            return Response({
-                'error': str(e),
-                'message': 'Error fetching products',
-                'traceback': traceback.format_exc(),
-                'results': []
-            }, status=status.HTTP_200_OK)  # Return 200 with error info instead of 500
-
-# Legacy Color/Fabric ViewSets (for compatibility)
-class ColorViewSet(viewsets.ModelViewSet):
-    queryset = Color.objects.all()
-    serializer_class = ColorSerializer
-    permission_classes = [IsAuthenticated]
-    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    ordering = ['name']
-
-class FabricViewSet(viewsets.ModelViewSet):
-    queryset = Fabric.objects.all()
-    serializer_class = FabricSerializer
-    permission_classes = [IsAuthenticated]
-    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    ordering = ['name']
-
-# MVP Reference ViewSets (for physical boards)
-class ColorReferenceViewSet(viewsets.ModelViewSet):
-    queryset = ColorReference.objects.all()
-    serializer_class = ColorReferenceSerializer
-    permission_classes = [IsAuthenticated]
-    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    ordering = ['color_code']
-
-class FabricReferenceViewSet(viewsets.ModelViewSet):
-    queryset = FabricReference.objects.all()
-    serializer_class = FabricReferenceSerializer
-    permission_classes = [IsAuthenticated]
-    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    ordering = ['fabric_letter']
-
-class OrderItemViewSet(viewsets.ModelViewSet):
-    queryset = OrderItem.objects.all()
-    serializer_class = OrderItemSerializer
-    permission_classes = [IsAuthenticated]
-    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    filterset_fields = ['order', 'product', 'color', 'fabric']
-    ordering = ['-id']
-
-    def list(self, request, *args, **kwargs):
-        """List order items with optional order filter"""
-        order_id = request.query_params.get('order')
-        if order_id:
-            queryset = self.queryset.filter(order_id=order_id)
-        else:
-            queryset = self.queryset
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def dashboard_stats(request):
-    """
-    Comprehensive dashboard statistics for OOX Furniture frontend
-    """
-    from django.db.models import Count, Sum, Q
-    from datetime import datetime, timedelta
-    from django.utils import timezone
-    
-    # Calculate date ranges
-    today = timezone.now().date()
-    week_ago = today - timedelta(days=7)
-    month_ago = today - timedelta(days=30)
-    
-    # Order Statistics
-    total_orders = Order.objects.count()
-    pending_orders = Order.objects.filter(order_status='pending').count()
-    confirmed_orders = Order.objects.filter(order_status='confirmed').count()
-    in_production = Order.objects.filter(production_status='in_production').count()
-    ready_for_delivery = Order.objects.filter(order_status='order_ready').count()
-    delivered_orders = Order.objects.filter(order_status='delivered').count()
-    
-    # Overdue orders (past delivery deadline)
-    overdue_orders = Order.objects.filter(
-        delivery_deadline__lt=today,
-        order_status__in=['pending', 'confirmed', 'order_ready', 'out_for_delivery']
-    ).count()
-    
-    # Customer Statistics
-    from .models import Customer
-    total_customers = Customer.objects.count()
-    new_customers_week = Customer.objects.filter(created_at__gte=week_ago).count()
-    active_customers = Customer.objects.filter(
-        orders__order_date__gte=month_ago
-    ).distinct().count()
-    
-    # Financial Statistics
-    total_revenue = Order.objects.aggregate(
-        total=Sum('total_amount')
-    )['total'] or 0
-    
-    pending_payments = Order.objects.filter(
-        payment_status__in=['pending', 'partial', 'overdue']
-    ).aggregate(total=Sum('balance_amount'))['total'] or 0
-    
-    revenue_this_month = Order.objects.filter(
-        order_date__gte=month_ago
-    ).aggregate(total=Sum('total_amount'))['total'] or 0
-    
-    # Production Statistics
-    not_started = Order.objects.filter(production_status='not_started').count()
-    cutting = Order.objects.filter(production_status='cutting').count()
-    sewing = Order.objects.filter(production_status='sewing').count()
-    finishing = Order.objects.filter(production_status='finishing').count()
-    quality_check = Order.objects.filter(production_status='quality_check').count()
-    completed = Order.objects.filter(production_status='completed').count()
-    
-    # User/Team Statistics
-    from users.models import User
-    total_users = User.objects.count()
-    active_users = User.objects.filter(is_active=True).count()
-    owners = User.objects.filter(role='owner').count()
-    admins = User.objects.filter(role='admin').count()
-    warehouse_users = User.objects.filter(role='warehouse').count()
-    delivery_users = User.objects.filter(role='delivery').count()
-    
-    # Recent Activity
-    recent_orders = Order.objects.filter(
-        order_date__gte=week_ago
-    ).count()
-    
-    return Response({
-        # Core Order Stats
-        'total_orders': total_orders,
-        'pending_orders': pending_orders,
-        'confirmed_orders': confirmed_orders,
-        'in_production': in_production,
-        'ready_for_delivery': ready_for_delivery,
-        'delivered_orders': delivered_orders,
-        'overdue_orders': overdue_orders,
-        
-        # Customer Stats
-        'total_customers': total_customers,
-        'new_customers_week': new_customers_week,
-        'active_customers': active_customers,
-        
-        # Financial Stats
-        'total_revenue': float(total_revenue),
-        'pending_payments': float(pending_payments),
-        'revenue_this_month': float(revenue_this_month),
-        
-        # Production Pipeline Stats
-        'production_stats': {
-            'not_started': not_started,
-            'cutting': cutting,
-            'sewing': sewing,
-            'finishing': finishing,
-            'quality_check': quality_check,
-            'completed': completed,
-        },
-        
-        # Team Stats
-        'team_stats': {
-            'total_users': total_users,
-            'active_users': active_users,
-            'owners': owners,
-            'admins': admins,
-            'warehouse_users': warehouse_users,
-            'delivery_users': delivery_users,
-        },
-        
-        # Recent Activity
-        'recent_activity': {
-            'orders_this_week': recent_orders,
-        },
-        
-        # Quick Metrics for Dashboard Cards
-        'quick_metrics': {
-            'orders_today': Order.objects.filter(order_date__date=today).count(),
-            'deliveries_today': Order.objects.filter(
-                expected_delivery_date=today,
-                order_status='order_ready'
-            ).count(),
-            'urgent_orders': overdue_orders,
-            'production_capacity': in_production + cutting + sewing + finishing,
-        }
-    }) 
-
-    @action(detail=False, methods=['get'])
-    def order_workflow_dashboard(self, request):
-        """Complete order workflow dashboard - shows orders by workflow stage"""
-        user = request.user
-        
-        # Get all orders visible to user
-        all_orders = self.get_queryset()
-        
-        # Define order workflow stages
-        workflow_stages = {
-            'new_orders': all_orders.filter(order_status='deposit_pending'),
-            'paid_orders': all_orders.filter(order_status='deposit_paid'),
-            'in_production': all_orders.filter(
-                order_status='deposit_paid',
-                production_status__in=['cutting', 'sewing', 'finishing', 'quality_check']
-            ),
-            'ready_for_delivery': all_orders.filter(order_status='order_ready'),
-            'out_for_delivery': all_orders.filter(order_status='out_for_delivery'),
-            'completed': all_orders.filter(order_status='delivered'),
-            'cancelled': all_orders.filter(order_status='cancelled')
-        }
-        
-        # Calculate workflow metrics
-        workflow_metrics = {}
-        for stage, queryset in workflow_stages.items():
-            workflow_metrics[stage] = {
-                'count': queryset.count(),
-                'orders': OrderListSerializer(queryset[:10], many=True).data  # Limit for performance
-            }
-        
-        # Get recent workflow activities
-        recent_activities = OrderHistory.objects.filter(
-            order__in=all_orders
-        ).select_related('order', 'user').order_by('-timestamp')[:20]
-        
-        activities_data = []
-        for activity in recent_activities:
-            activities_data.append({
-                'id': activity.id,
-                'order_number': activity.order.order_number,
-                'action': activity.action,
-                'details': activity.details,
-                'user': activity.user.get_full_name() if activity.user else 'System',
-                'timestamp': activity.timestamp,
-                'order_id': activity.order.id
-            })
-        
-        # Calculate workflow performance
-        from django.utils import timezone
-        from datetime import timedelta
-        
-        today = timezone.now().date()
-        week_ago = today - timedelta(days=7)
-        
-        performance_metrics = {
-            'orders_created_this_week': all_orders.filter(created_at__date__gte=week_ago).count(),
-            'orders_completed_this_week': all_orders.filter(
-                order_status='delivered',
-                actual_delivery_date__gte=week_ago
-            ).count(),
-            'average_production_time': self._calculate_average_production_time(all_orders),
-            'overdue_orders': all_orders.filter(
-                delivery_deadline__lt=today,
-                order_status__in=['deposit_pending', 'deposit_paid', 'order_ready', 'out_for_delivery']
-            ).count()
-        }
-        
-        return Response({
-            'workflow_stages': workflow_metrics,
-            'recent_activities': activities_data,
-            'performance_metrics': performance_metrics,
-            'user_permissions': self._get_user_workflow_permissions(user)
-        })
-    
-    def _calculate_average_production_time(self, orders):
-        """Calculate average production time for completed orders"""
-        completed_orders = orders.filter(
-            order_status='delivered',
-            deposit_paid_date__isnull=False,
-            actual_delivery_date__isnull=False
-        )
-        
-        if not completed_orders.exists():
-            return 0
-        
-        total_days = 0
-        count = 0
-        
-        for order in completed_orders:
-            if order.deposit_paid_date and order.actual_delivery_date:
-                days = (order.actual_delivery_date - order.deposit_paid_date.date()).days
-                total_days += days
-                count += 1
-        
-        return round(total_days / count, 1) if count > 0 else 0
-    
-    def _get_user_workflow_permissions(self, user):
-        """Get user permissions for workflow actions"""
-        permissions = {
-            'can_create_orders': user.role in ['owner', 'admin'],
-            'can_edit_orders': user.role in ['owner', 'admin'],
-            'can_delete_orders': user.role in ['owner', 'admin'],
-            'can_change_order_status': user.role in ['owner', 'admin', 'warehouse'],
-            'can_change_production_status': user.role in ['owner', 'admin', 'warehouse_worker', 'warehouse'],
-            'can_change_delivery_status': user.role in ['owner', 'admin', 'delivery'],
-            'can_assign_to_warehouse': user.role in ['owner', 'admin', 'warehouse'],
-            'can_assign_to_delivery': user.role in ['owner', 'admin'],
-            'can_escalate_priority': user.role == 'owner',
-            'can_cancel_orders': user.role in ['owner', 'admin']
-        }
-        return permissions
-    
-    @action(detail=True, methods=['post'])
-    def advance_workflow(self, request, pk=None):
-        """Advance order to next workflow stage"""
-        order = self.get_object()
-        user = request.user
-        
-        # Define workflow transitions
-        workflow_transitions = {
-            'deposit_pending': 'deposit_paid',
-            'deposit_paid': 'order_ready',
-            'order_ready': 'out_for_delivery',
-            'out_for_delivery': 'delivered'
-        }
-        
-        current_status = order.order_status
-        next_status = workflow_transitions.get(current_status)
-        
-        if not next_status:
-            return Response({
-                'error': f'No next stage available for status: {current_status}',
-                'current_status': current_status
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Check permissions for status change
-        if not self._can_advance_workflow(user, order, next_status):
-            return Response({
-                'error': f'Permission denied: Cannot advance order from {current_status} to {next_status}',
-                'your_role': user.role
-            }, status=status.HTTP_403_FORBIDDEN)
-        
-        # Perform the status change
-        old_status = order.order_status
-        order.order_status = next_status
-        
-        # Handle special workflow logic
-        from django.utils import timezone
-        from datetime import timedelta
-        
-        if next_status == 'deposit_paid':
-            order.deposit_paid_date = timezone.now()
-        elif next_status == 'out_for_delivery':
-            if not order.expected_delivery_date:
-                order.expected_delivery_date = timezone.now().date() + timedelta(days=1)
-        elif next_status == 'delivered':
-            order.actual_delivery_date = timezone.now().date()
-        
-        order.save()
-        
-        # Log the workflow advancement
-        OrderHistory.objects.create(
-            order=order,
-            user=user,
-            action="Workflow advanced",
-            details=f"Advanced from {old_status} to {next_status}"
-        )
-        
-        return Response({
-            'message': f'Order advanced from {old_status} to {next_status}',
-            'order_number': order.order_number,
-            'previous_status': old_status,
-            'new_status': next_status,
-            'next_possible_status': workflow_transitions.get(next_status, 'Complete')
-        })
-    
-    def _can_advance_workflow(self, user, order, next_status):
-        """Check if user can advance workflow to next status"""
-        # Owner and admin can advance any workflow
-        if user.role in ['owner', 'admin']:
-            return True
-        
-        # Warehouse can mark orders ready for delivery
-        if user.role in ['warehouse', 'warehouse_worker'] and next_status == 'order_ready':
-            return True
-        
-        # Delivery can mark orders out for delivery and delivered
-        if user.role == 'delivery' and next_status in ['out_for_delivery', 'delivered']:
-            return True
-        
-        return False
-    
-    @action(detail=True, methods=['post'])
-    def assign_order(self, request, pk=None):
-        """Assign order to warehouse or delivery personnel"""
-        order = self.get_object()
-        user = request.user
-        
-        # Check permissions
-        if user.role not in ['owner', 'admin']:
-            return Response({
-                'error': 'Permission denied: Only Owner and Admin can assign orders'
-            }, status=status.HTTP_403_FORBIDDEN)
-        
-        assignment_type = request.data.get('assignment_type')  # 'warehouse' or 'delivery'
-        assigned_user_id = request.data.get('assigned_user_id')
-        
-        if not assignment_type or not assigned_user_id:
-            return Response({
-                'error': 'assignment_type and assigned_user_id are required',
-                'valid_assignment_types': ['warehouse', 'delivery']
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            from users.models import User
-            assigned_user = User.objects.get(id=assigned_user_id)
-            
-            if assignment_type == 'warehouse':
-                if not assigned_user.is_warehouse:
-                    return Response({
-                        'error': 'User must have warehouse role for warehouse assignment'
-                    }, status=status.HTTP_400_BAD_REQUEST)
-                
-                old_assignment = order.assigned_to_warehouse
-                order.assigned_to_warehouse = assigned_user
-                assignment_field = 'warehouse'
-                
-            elif assignment_type == 'delivery':
-                if assigned_user.role != 'delivery':
-                    return Response({
-                        'error': 'User must have delivery role for delivery assignment'
-                    }, status=status.HTTP_400_BAD_REQUEST)
-                
-                old_assignment = order.assigned_to_delivery
-                order.assigned_to_delivery = assigned_user
-                assignment_field = 'delivery'
-                
-            else:
-                return Response({
-                    'error': 'Invalid assignment_type',
-                    'valid_types': ['warehouse', 'delivery']
-                }, status=status.HTTP_400_BAD_REQUEST)
-            
-            order.save()
-            
-            # Log the assignment
-            old_name = old_assignment.get_full_name() if old_assignment else 'Unassigned'
-            new_name = assigned_user.get_full_name() or assigned_user.username
-            
-            OrderHistory.objects.create(
-                order=order,
-                user=user,
-                action=f"Order assigned to {assignment_field}",
-                details=f"Changed from {old_name} to {new_name}"
+            # Get warehouse-related orders
+            warehouse_orders = self.get_queryset().filter(
+                order_status__in=['deposit_paid', 'order_ready'],
+                production_status__in=['cutting', 'sewing', 'finishing', 'quality_check', 'completed']
             )
             
+            # Production pipeline stats
+            production_stats = {
+                'cutting': warehouse_orders.filter(production_status='cutting').count(),
+                'sewing': warehouse_orders.filter(production_status='sewing').count(),
+                'finishing': warehouse_orders.filter(production_status='finishing').count(),
+                'quality_check': warehouse_orders.filter(production_status='quality_check').count(),
+                'completed': warehouse_orders.filter(production_status='completed').count(),
+                'total_in_production': warehouse_orders.count()
+            }
+
+            # Get active tasks from warehouse
+            try:
+                from tasks.models import Task
+                active_tasks = Task.objects.filter(
+                    status__in=['pending', 'in_progress', 'paused'],
+                    assigned_to__role__in=['warehouse_worker', 'warehouse']
+                )
+        
+                task_stats = {
+                    'total_active_tasks': active_tasks.count(),
+                    'pending_tasks': active_tasks.filter(status='pending').count(),
+                    'in_progress_tasks': active_tasks.filter(status='in_progress').count(),
+                    'paused_tasks': active_tasks.filter(status='paused').count()
+                }
+            except ImportError:
+                # Tasks app not available
+                task_stats = {
+                    'total_active_tasks': 0,
+                    'pending_tasks': 0,
+                    'in_progress_tasks': 0,
+                    'paused_tasks': 0
+                }
+        
+            # Warehouse workforce
+            try:
+                from users.models import User
+                warehouse_workers = User.objects.filter(
+                    role__in=['warehouse_worker', 'warehouse'],
+                    is_active=True
+                )
+        
+                workforce_stats = {
+                    'total_workers': warehouse_workers.count(),
+                    'managers': warehouse_workers.filter(role='warehouse').count(),
+                    'workers': warehouse_workers.filter(role__in=['warehouse_worker', 'warehouse']).count(),
+                    'active_workers': warehouse_workers.filter(
+                        id__in=active_tasks.values('assigned_to').distinct()
+                    ).count() if 'active_tasks' in locals() else 0
+                }
+            except ImportError:
+                workforce_stats = {
+                    'total_workers': 0,
+                    'managers': 0,
+                    'workers': 0,
+                    'active_workers': 0
+                }
+        
+            # Stock alerts (if inventory system exists)
+            stock_alerts = []
+            try:
+                from inventory.models import Material
+                from django.db.models import F
+                low_stock_materials = Material.objects.filter(
+                    current_stock__lte=F('minimum_stock_level')
+                )[:10]
+                
+                for material in low_stock_materials:
+                    stock_alerts.append({
+                        'material_name': material.name,
+                        'current_stock': material.current_stock,
+                        'minimum_level': material.minimum_stock_level,
+                        'shortage': material.minimum_stock_level - material.current_stock
+                    })
+            except ImportError:
+                # Inventory system not available
+                pass
+        
+            # Recent warehouse activities
+            warehouse_activities = OrderHistory.objects.filter(
+                order__in=warehouse_orders,
+                action__icontains='production'
+            ).select_related('order', 'user').order_by('-timestamp')[:10]
+        
+            activities_data = []
+            for activity in warehouse_activities:
+                activities_data.append({
+                    'order_number': activity.order.order_number,
+                    'action': activity.action,
+                    'details': activity.details,
+                    'user': activity.user.get_full_name() if activity.user else 'System',
+                    'timestamp': activity.timestamp
+                })
+        
+            # Bottleneck analysis
+            bottlenecks = []
+            if production_stats['cutting'] > 10:
+                bottlenecks.append({
+                    'stage': 'Cutting',
+                    'count': production_stats['cutting'],
+                    'message': 'High number of orders in cutting stage'
+                })
+            if production_stats['sewing'] > 15:
+                bottlenecks.append({
+                    'stage': 'Sewing',
+                    'count': production_stats['sewing'],
+                    'message': 'Potential bottleneck in sewing department'
+                })
+            if production_stats['quality_check'] > 8:
+                bottlenecks.append({
+                    'stage': 'Quality Check',
+                    'count': production_stats['quality_check'],
+                    'message': 'Quality check backlog detected'
+                })
+        
             return Response({
-                'message': f'Order assigned to {assignment_field} successfully',
-                'order_number': order.order_number,
-                'assignment_type': assignment_field,
-                'assigned_to': new_name,
-                'previous_assignment': old_name
-            })
-            
-        except User.DoesNotExist:
+                'production_pipeline': production_stats,
+                'task_overview': task_stats,
+                'workforce_summary': workforce_stats,
+                'stock_alerts': stock_alerts,
+                'recent_activities': activities_data,
+                'bottleneck_analysis': bottlenecks,
+                'navigation_message': {
+                    'title': 'Warehouse Operations',
+                    'description': 'For detailed warehouse management and operations control, please use the Warehouse Dashboard.',
+                    'action_url': '/warehouse',
+                    'action_text': 'Go to Warehouse Dashboard'
+                },
+                'last_updated': timezone.now()
+            }) 
+        except Exception as e:
+            import traceback
             return Response({
-                'error': 'Assigned user not found'
-            }, status=status.HTTP_404_NOT_FOUND)
-    
-    @action(detail=False, methods=['get'], url_path='management_data')
-    def order_management_data(self, request):
-        """Get comprehensive data for order management interface"""
-        user = request.user
-        
-        # Get all available data for order management
-        from users.models import User
-        
-        # Available users for assignment
-        warehouse_users = User.objects.filter(
-            role__in=['warehouse_worker', 'warehouse'],
-            is_active=True
-        ).values('id', 'username', 'first_name', 'last_name', 'role')
-        
-        delivery_users = User.objects.filter(
-            role='delivery',
-            is_active=True
-        ).values('id', 'username', 'first_name', 'last_name', 'role')
-        
-        # Order status choices
+                'error': f'Failed to fetch warehouse overview: {str(e)}',
+                'traceback': traceback.format_exc()
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['get'], url_path='status_options')
+    def status_options(self, request):
+        """Expose status dropdown options to frontend consumers."""
         order_statuses = [{'value': choice[0], 'label': choice[1]} for choice in Order.ORDER_STATUS_CHOICES]
         production_statuses = [{'value': choice[0], 'label': choice[1]} for choice in Order.PRODUCTION_STATUS_CHOICES]
-        
-        # Recent customers for quick order creation
-        recent_customers = Customer.objects.order_by('-created_at')[:20]
-        customers_data = CustomerSerializer(recent_customers, many=True).data
-        
-        # Available products
-        products = Product.objects.filter(is_active=True).order_by('product_name')[:50]
-        products_data = ProductSerializer(products, many=True).data
-        
         return Response({
-            'assignment_options': {
-                'warehouse_users': list(warehouse_users),
-                'delivery_users': list(delivery_users)
-            },
             'status_options': {
                 'order_statuses': order_statuses,
                 'production_statuses': production_statuses
-            },
-            'order_creation_data': {
-                'recent_customers': customers_data,
-                'available_products': products_data
-            },
-            'user_permissions': self._get_user_workflow_permissions(user)
-        }) 
+            }
+        })
 
     @action(detail=True, methods=['patch'])
     def update_payment(self, request, pk=None):
         """Update payment information for an order"""
         try:
-        order = self.get_object()
-        user = request.user
-        
-        # Check permissions - Owner and Admin can update payments
-        if user.role not in ['owner', 'admin']:
-            return Response({
-                'error': 'Permission denied: Only Owner and Admin can update payments'
-            }, status=status.HTTP_403_FORBIDDEN)
-        
+            order = self.get_object()
+            user = request.user
+            
+            # Check permissions - Owner and Admin can update payments
+            if user.role not in ['owner', 'admin']:
+                return Response({
+                    'error': 'Permission denied: Only Owner and Admin can update payments'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
             # Extract payment data with proper type conversion
-        total_amount = request.data.get('total_amount')
-        deposit_amount = request.data.get('deposit_amount') 
-        balance_amount = request.data.get('balance_amount')
-        payment_status = request.data.get('payment_status')
+            total_amount = request.data.get('total_amount')
+            deposit_amount = request.data.get('deposit_amount') 
+            balance_amount = request.data.get('balance_amount')
+            payment_status = request.data.get('payment_status')
             payment_method = request.data.get('payment_method', '')
             payment_notes = request.data.get('payment_notes', '')
+            proof_id = request.data.get('proof_id')
             
             # Convert string amounts to Decimal if provided
             from decimal import Decimal, InvalidOperation
@@ -2027,30 +1391,54 @@ def dashboard_stats(request):
                 return Response({
                     'error': f'Invalid amount format: {str(e)}'
                 }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Store old values for logging
-        old_values = {
-            'total_amount': order.total_amount,
-            'deposit_amount': order.deposit_amount,
-            'balance_amount': order.balance_amount,
-            'payment_status': order.payment_status
-        }
-        
-        # Update payment fields
-        changes = []
-        if total_amount is not None:
-            order.total_amount = total_amount
-            changes.append(f"Total amount: R{old_values['total_amount']} → R{total_amount}")
-        
-        if deposit_amount is not None:
-            order.deposit_amount = deposit_amount
-            changes.append(f"Deposit amount: R{old_values['deposit_amount']} → R{deposit_amount}")
-        
-        if balance_amount is not None:
-            order.balance_amount = balance_amount
-            changes.append(f"Balance amount: R{old_values['balance_amount']} → R{balance_amount}")
-        
-        if payment_status is not None:
+            
+            # Store old values for logging
+            old_values = {
+                'total_amount': order.total_amount,
+                'deposit_amount': order.deposit_amount,
+                'balance_amount': order.balance_amount,
+                'payment_status': order.payment_status
+            }
+            
+            # Enforce EFT proof-of-payment if mandated
+            if (payment_method or order.payment_method) and (payment_method or order.payment_method).upper() == 'EFT':
+                # If client sends proof_id, validate linkage; otherwise require a recent proof for this order
+                recent_proof = None
+                if proof_id:
+                    try:
+                        recent_proof = PaymentProof.objects.get(id=proof_id, order=order)
+                    except PaymentProof.DoesNotExist:
+                        return Response({
+                            'error': 'Invalid payment proof: proof_id not found for this order',
+                            'required_fields': ['proof_id']
+                        }, status=status.HTTP_400_BAD_REQUEST)
+                else:
+                    from django.utils import timezone
+                    recent_window_minutes = 60
+                    recent_cutoff = timezone.now() - timedelta(minutes=recent_window_minutes)
+                    recent_proof = order.payment_proofs.filter(uploaded_at__gte=recent_cutoff).first()
+                    if not recent_proof:
+                        return Response({
+                            'error': 'Payment proof required for EFT payments',
+                            'detail': 'Upload payment proof and include proof_id, or upload within the last 60 minutes before updating payment.',
+                            'required_fields': ['proof_id']
+                        }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Update payment fields
+            changes = []
+            if total_amount is not None:
+                order.total_amount = total_amount
+                changes.append(f"Total amount: R{old_values['total_amount']} → R{total_amount}")
+            
+            if deposit_amount is not None:
+                order.deposit_amount = deposit_amount
+                changes.append(f"Deposit amount: R{old_values['deposit_amount']} → R{deposit_amount}")
+            
+            if balance_amount is not None:
+                order.balance_amount = balance_amount
+                changes.append(f"Balance amount: R{old_values['balance_amount']} → R{balance_amount}")
+            
+            if payment_status is not None:
                 # Validate payment status
                 valid_statuses = [choice[0] for choice in Order.PAYMENT_STATUS_CHOICES]
                 if payment_status not in valid_statuses:
@@ -2058,16 +1446,16 @@ def dashboard_stats(request):
                         'error': f'Invalid payment status: {payment_status}. Valid statuses: {", ".join(valid_statuses)}'
                     }, status=status.HTTP_400_BAD_REQUEST)
                 
-            order.payment_status = payment_status
-            changes.append(f"Payment status: {old_values['payment_status']} → {payment_status}")
+                order.payment_status = payment_status
+                changes.append(f"Payment status: {old_values['payment_status']} → {payment_status}")
+                
+                # Special handling for deposit paid status
+                if payment_status == 'deposit_paid' and not order.deposit_paid_date:
+                    from django.utils import timezone
+                    order.deposit_paid_date = timezone.now()
+                    order.order_status = 'deposit_paid'
+                    changes.append("Activated production queue (deposit paid)")
             
-            # Special handling for deposit paid status
-            if payment_status == 'deposit_paid' and not order.deposit_paid_date:
-                from django.utils import timezone
-                order.deposit_paid_date = timezone.now()
-                order.order_status = 'deposit_paid'
-                changes.append("Activated production queue (deposit paid)")
-        
             # Update additional payment fields if provided
             if payment_method:
                 order.payment_method = payment_method
@@ -2090,26 +1478,57 @@ def dashboard_stats(request):
                         'error': 'Balance amount cannot be greater than total amount'
                     }, status=status.HTTP_400_BAD_REQUEST)
             
-        order.save()
-        
-        # Log the payment update
-        if changes:
-            OrderHistory.objects.create(
+            # Compute deltas for transaction log
+            deposit_delta = (order.deposit_amount - old_values['deposit_amount']) if deposit_amount is not None else 0
+            balance_delta = (order.balance_amount - old_values['balance_amount']) if balance_amount is not None else 0
+            total_delta = (order.total_amount - old_values['total_amount']) if total_amount is not None else 0
+            previous_balance = old_values['balance_amount']
+            new_balance = order.balance_amount if balance_amount is not None else previous_balance
+            amount_delta = previous_balance - new_balance  # positive means outstanding reduced
+            
+            order.save()
+            
+            # Log the payment update
+            if changes:
+                OrderHistory.objects.create(
+                    order=order,
+                    user=user,
+                    action="Payment updated",
+                    details="; ".join(changes)
+                )
+            
+            # Persist transaction record for owner dashboard
+            proof_obj = None
+            if proof_id:
+                try:
+                    proof_obj = PaymentProof.objects.get(id=proof_id, order=order)
+                except PaymentProof.DoesNotExist:
+                    proof_obj = None
+            from .models import PaymentTransaction
+            PaymentTransaction.objects.create(
                 order=order,
-                user=user,
-                action="Payment updated",
-                details="; ".join(changes)
+                actor_user=user,
+                total_amount_delta=total_delta,
+                deposit_delta=deposit_delta,
+                balance_delta=balance_delta,
+                amount_delta=amount_delta,
+                previous_balance=previous_balance,
+                new_balance=new_balance,
+                payment_method=order.payment_method,
+                payment_status=order.payment_status,
+                proof=proof_obj,
+                notes=payment_notes or ''
             )
-        
-        return Response({
-            'message': 'Payment updated successfully',
-            'order_number': order.order_number,
-            'total_amount': order.total_amount,
-            'deposit_amount': order.deposit_amount,
-            'balance_amount': order.balance_amount,
-            'payment_status': order.payment_status,
-            'changes': changes
-        })
+            
+            return Response({
+                'message': 'Payment updated successfully',
+                'order_number': order.order_number,
+                'total_amount': order.total_amount,
+                'deposit_amount': order.deposit_amount,
+                'balance_amount': order.balance_amount,
+                'payment_status': order.payment_status,
+                'changes': changes
+            })
             
         except Exception as e:
             import traceback
@@ -2118,301 +1537,136 @@ def dashboard_stats(request):
             return Response({
                 'error': f'Payment update failed: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
-    @action(detail=False, methods=['get'])
-    def payments_dashboard(self, request):
-        """Get payment overview dashboard"""
-        user = request.user
-        
-        # Get all orders visible to user
-        all_orders = self.get_queryset()
-        
-        # Payment statistics
-        from django.db.models import Sum, Count, Q
-        
-        payment_stats = {
-            'total_revenue': all_orders.aggregate(
-                total=Sum('total_amount')
-            )['total'] or 0,
-            
-            'total_deposits': all_orders.aggregate(
-                total=Sum('deposit_amount')
-            )['total'] or 0,
-            
-            'outstanding_balance': all_orders.aggregate(
-                total=Sum('balance_amount')
-            )['total'] or 0,
-            
-            'payment_status_breakdown': {},
-            'overdue_payments': all_orders.filter(
-                payment_status='overdue'
-            ).count(),
-            
-            'pending_deposits': all_orders.filter(
-                payment_status='deposit_pending'
-            ).count(),
-            
-            'fully_paid_orders': all_orders.filter(
-                payment_status='fully_paid'
-            ).count()
-        }
-        
-        # Payment status breakdown
-        for status_choice in Order.PAYMENT_STATUS_CHOICES:
-            status_code = status_choice[0]
-            status_label = status_choice[1]
-            count = all_orders.filter(payment_status=status_code).count()
-            payment_stats['payment_status_breakdown'][status_code] = {
-                'label': status_label,
-                'count': count
-            }
-        
-        # Recent payment activities
-        recent_payments = OrderHistory.objects.filter(
-            order__in=all_orders,
-            action__icontains='payment'
-        ).select_related('order', 'user').order_by('-timestamp')[:15]
-        
-        payment_activities = []
-        for activity in recent_payments:
-            payment_activities.append({
-                'id': activity.id,
-                'order_number': activity.order.order_number,
-                'order_id': activity.order.id,
-                'action': activity.action,
-                'details': activity.details,
-                'user': activity.user.get_full_name() if activity.user else 'System',
-                'timestamp': activity.timestamp
-            })
-        
-        # Orders requiring payment attention
-        attention_orders = []
-        
-        # Overdue payments
-        overdue_orders = all_orders.filter(payment_status='overdue')
-        for order in overdue_orders[:10]:
-            attention_orders.append({
-                'order_id': order.id,
-                'order_number': order.order_number,
-                'customer_name': order.customer.name if order.customer else order.customer_name,
-                'issue': 'Overdue Payment',
-                'amount': order.balance_amount,
-                'days_overdue': (timezone.now().date() - order.delivery_deadline).days
-            })
-        
-        # Large outstanding balances (over R5000)
-        large_balances = all_orders.filter(
-            balance_amount__gt=5000,
-            payment_status__in=['deposit_paid', 'partial']
-        )
-        for order in large_balances[:5]:
-            attention_orders.append({
-                'order_id': order.id,
-                'order_number': order.order_number,
-                'customer_name': order.customer.name if order.customer else order.customer_name,
-                'issue': 'Large Outstanding Balance',
-                'amount': order.balance_amount,
-                'days_outstanding': (timezone.now().date() - order.order_date.date()).days
-            })
-        
-        return Response({
-            'payment_statistics': payment_stats,
-            'recent_activities': payment_activities,
-            'attention_required': attention_orders,
-            'user_permissions': {
-                'can_update_payments': user.role in ['owner', 'admin'],
-                'can_view_all_payments': user.role in ['owner', 'admin'],
-                'can_mark_overdue': user.role in ['owner', 'admin']
-            }
-        })
-    
-    @action(detail=True, methods=['post'])
-    def mark_payment_overdue(self, request, pk=None):
-        """Mark order payment as overdue"""
+
+    @action(detail=True, methods=['get'])
+    def payment_transactions(self, request, pk=None):
+        """List payment transactions for a specific order."""
         order = self.get_object()
-        user = request.user
-        
-        # Check permissions
-        if user.role not in ['owner', 'admin']:
-            return Response({
-                'error': 'Permission denied: Only Owner and Admin can mark payments overdue'
-            }, status=status.HTTP_403_FORBIDDEN)
-        
-        old_status = order.payment_status
-        order.payment_status = 'overdue'
-        order.save()
-        
-        # Log the change
-        OrderHistory.objects.create(
-            order=order,
-            user=user,
-            action="Payment marked overdue",
-            details=f"Payment status changed from {old_status} to overdue"
-        )
-        
-        return Response({
-            'message': f'Order #{order.order_number} marked as overdue',
-            'order_number': order.order_number,
-            'previous_status': old_status,
-            'new_status': 'overdue'
-        }) 
+        from .models import PaymentTransaction
+        txns = PaymentTransaction.objects.filter(order=order).select_related('actor_user', 'proof', 'order')
+        from .serializers import PaymentTransactionSerializer
+        page = self.paginate_queryset(txns)
+        if page is not None:
+            serializer = PaymentTransactionSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = PaymentTransactionSerializer(txns, many=True)
+        return Response(serializer.data)
 
-    @action(detail=False, methods=['get'])
-    def admin_warehouse_overview(self, request):
-        """Read-only warehouse overview for admin dashboard"""
-        try:
-        user = request.user
-        
-        # Check permissions - only admin and owner can access
-        if user.role not in ['admin', 'owner']:
-            return Response({
-                'error': 'Permission denied: Only Admin and Owner can view warehouse overview'
-            }, status=status.HTTP_403_FORBIDDEN)
-        
-        # Get warehouse-related orders
-        warehouse_orders = self.get_queryset().filter(
-            order_status__in=['deposit_paid', 'order_ready'],
-            production_status__in=['cutting', 'sewing', 'finishing', 'quality_check', 'completed']
-        )
-        
-        # Production pipeline stats
-        production_stats = {
-            'cutting': warehouse_orders.filter(production_status='cutting').count(),
-            'sewing': warehouse_orders.filter(production_status='sewing').count(),
-            'finishing': warehouse_orders.filter(production_status='finishing').count(),
-            'quality_check': warehouse_orders.filter(production_status='quality_check').count(),
-            'completed': warehouse_orders.filter(production_status='completed').count(),
-            'total_in_production': warehouse_orders.count()
-        }
-        
-        # Get active tasks from warehouse
-            try:
-        from tasks.models import Task
-        active_tasks = Task.objects.filter(
-            status__in=['pending', 'in_progress', 'paused'],
-            assigned_to__role__in=['warehouse_worker', 'warehouse']
-        )
-        
-        task_stats = {
-            'total_active_tasks': active_tasks.count(),
-            'pending_tasks': active_tasks.filter(status='pending').count(),
-            'in_progress_tasks': active_tasks.filter(status='in_progress').count(),
-            'paused_tasks': active_tasks.filter(status='paused').count()
-        }
-            except ImportError:
-                # Tasks app not available
-                task_stats = {
-                    'total_active_tasks': 0,
-                    'pending_tasks': 0,
-                    'in_progress_tasks': 0,
-                    'paused_tasks': 0
-                }
-        
-        # Warehouse workforce
-            try:
-        from users.models import User
-        warehouse_workers = User.objects.filter(
-            role__in=['warehouse_worker', 'warehouse'],
-            is_active=True
-        )
-        
-        workforce_stats = {
-            'total_workers': warehouse_workers.count(),
-            'managers': warehouse_workers.filter(role='warehouse').count(),
-            'workers': warehouse_workers.filter(role__in=['warehouse_worker', 'warehouse']).count(),
-            'active_workers': warehouse_workers.filter(
-                id__in=active_tasks.values('assigned_to').distinct()
-                    ).count() if 'active_tasks' in locals() else 0
-                }
-            except ImportError:
-                workforce_stats = {
-                    'total_workers': 0,
-                    'managers': 0,
-                    'workers': 0,
-                    'active_workers': 0
-        }
-        
-        # Stock alerts (if inventory system exists)
-        stock_alerts = []
-        try:
-            from inventory.models import Material
-                from django.db.models import F
-            low_stock_materials = Material.objects.filter(
-                current_stock__lte=F('minimum_stock_level')
-            )[:10]
-            
-            for material in low_stock_materials:
-                stock_alerts.append({
-                    'material_name': material.name,
-                    'current_stock': material.current_stock,
-                    'minimum_level': material.minimum_stock_level,
-                    'shortage': material.minimum_stock_level - material.current_stock
-                })
-        except ImportError:
-            # Inventory system not available
-            pass
-        
-        # Recent warehouse activities
-        warehouse_activities = OrderHistory.objects.filter(
-            order__in=warehouse_orders,
-            action__icontains='production'
-        ).select_related('order', 'user').order_by('-timestamp')[:10]
-        
-        activities_data = []
-        for activity in warehouse_activities:
-            activities_data.append({
-                'order_number': activity.order.order_number,
-                'action': activity.action,
-                'details': activity.details,
-                'user': activity.user.get_full_name() if activity.user else 'System',
-                'timestamp': activity.timestamp
-            })
-        
-        # Bottleneck analysis
-        bottlenecks = []
-        if production_stats['cutting'] > 10:
-            bottlenecks.append({
-                'stage': 'Cutting',
-                'count': production_stats['cutting'],
-                'message': 'High number of orders in cutting stage'
-            })
-        if production_stats['sewing'] > 15:
-            bottlenecks.append({
-                'stage': 'Sewing',
-                'count': production_stats['sewing'],
-                'message': 'Potential bottleneck in sewing department'
-            })
-        if production_stats['quality_check'] > 8:
-            bottlenecks.append({
-                'stage': 'Quality Check',
-                'count': production_stats['quality_check'],
-                'message': 'Quality check backlog detected'
-            })
-        
-        return Response({
-            'production_pipeline': production_stats,
-            'task_overview': task_stats,
-            'workforce_summary': workforce_stats,
-            'stock_alerts': stock_alerts,
-            'recent_activities': activities_data,
-            'bottleneck_analysis': bottlenecks,
-            'navigation_message': {
-                'title': 'Warehouse Operations',
-                'description': 'For detailed warehouse management and operations control, please use the Warehouse Dashboard.',
-                'action_url': '/warehouse',
-                'action_text': 'Go to Warehouse Dashboard'
-            },
-            'last_updated': timezone.now()
-        }) 
 
-    @action(detail=False, methods=['get'], url_path='status_options')
-    def status_options(self, request):
-        """Expose status dropdown options to frontend consumers."""
-        order_statuses = [{'value': choice[0], 'label': choice[1]} for choice in Order.ORDER_STATUS_CHOICES]
-        production_statuses = [{'value': choice[0], 'label': choice[1]} for choice in Order.PRODUCTION_STATUS_CHOICES]
-        return Response({
-            'status_options': {
-                'order_statuses': order_statuses,
-                'production_statuses': production_statuses
-            }
-        })
+class PaymentTransactionViewSet(viewsets.ReadOnlyModelViewSet):
+    """Global read-only view of all payment transactions with filters for owner dashboard."""
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    ordering = ['-created_at']
+    search_fields = ['order__order_number', 'actor_user__username', 'payment_method', 'payment_status', 'notes']
+    ordering_fields = ['created_at', 'amount_delta', 'new_balance']
+
+    def get_queryset(self):
+        from .models import PaymentTransaction
+        qs = PaymentTransaction.objects.select_related('order', 'actor_user', 'proof')
+        params = self.request.query_params
+        if params.get('order'):
+            qs = qs.filter(order_id=params.get('order'))
+        if params.get('customer'):
+            qs = qs.filter(order__customer_name__icontains=params.get('customer'))
+        if params.get('method'):
+            qs = qs.filter(payment_method__iexact=params.get('method'))
+        if params.get('status'):
+            qs = qs.filter(payment_status__iexact=params.get('status'))
+        if params.get('user'):
+            qs = qs.filter(actor_user_id=params.get('user'))
+        from django.utils import timezone
+        from datetime import datetime
+        if params.get('since'):
+            qs = qs.filter(created_at__date__gte=params.get('since'))
+        if params.get('until'):
+            qs = qs.filter(created_at__date__lte=params.get('until'))
+        return qs
+
+    def list(self, request, *args, **kwargs):
+        from .serializers import PaymentTransactionSerializer
+        queryset = self.get_queryset()
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = PaymentTransactionSerializer(page, many=True)
+            # Add aggregates
+            total_amount_delta = sum([t.amount_delta for t in page]) if page else 0
+            response = self.get_paginated_response(serializer.data)
+            response.data.update({
+                'aggregates': {
+                    'total_amount_delta': float(total_amount_delta)
+                }
+            })
+            return response
+        serializer = PaymentTransactionSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+class PaymentProofViewSet(viewsets.ModelViewSet):
+    queryset = PaymentProof.objects.all()
+    serializer_class = PaymentProofSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['order', 'payment_type']
+    ordering = ['-uploaded_at']
+
+    def perform_create(self, serializer):
+        serializer.save(uploaded_by=self.request.user)
+
+
+class OrderHistoryViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = OrderHistory.objects.all()
+    serializer_class = OrderHistorySerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['order', 'user', 'action']
+    ordering = ['-timestamp']
+
+class ColorViewSet(viewsets.ModelViewSet):
+    queryset = Color.objects.all()
+    serializer_class = ColorSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    ordering = ['name']
+
+
+class FabricViewSet(viewsets.ModelViewSet):
+    queryset = Fabric.objects.all()
+    serializer_class = FabricSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    ordering = ['name']
+
+class ProductViewSet(viewsets.ModelViewSet):
+    queryset = Product.objects.all()
+    serializer_class = ProductSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly, CanCreateProducts]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['product_name', 'name', 'description', 'model_code']
+    ordering_fields = ['created_at', 'product_name', 'unit_price', 'stock']
+    ordering = ['-created_at']
+
+    def perform_create(self, serializer):
+        serializer.save()
+
+class ColorReferenceViewSet(viewsets.ModelViewSet):
+    queryset = ColorReference.objects.all()
+    serializer_class = ColorReferenceSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    ordering = ['color_code']
+
+
+class FabricReferenceViewSet(viewsets.ModelViewSet):
+    queryset = FabricReference.objects.all()
+    serializer_class = FabricReferenceSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    ordering = ['fabric_letter']
+
+class OrderItemViewSet(viewsets.ModelViewSet):
+    queryset = OrderItem.objects.all()
+    serializer_class = OrderItemSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['order', 'product', 'color', 'fabric']
+    ordering = ['-id']

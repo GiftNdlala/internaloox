@@ -15,10 +15,10 @@ router.register(r'fabrics', views.FabricViewSet)
 router.register(r'color-references', views.ColorReferenceViewSet)
 router.register(r'fabric-references', views.FabricReferenceViewSet)
 router.register(r'order-items', views.OrderItemViewSet)
+router.register(r'payments/transactions', views.PaymentTransactionViewSet, basename='payment-transactions')
 
 urlpatterns = [
     path('', include(router.urls)),
-    path('dashboard-stats/', views.dashboard_stats, name='dashboard_stats'),
     
     # Core workflow endpoints
     path('orders/workflow_dashboard/', views.OrderViewSet.as_view({'get': 'order_workflow_dashboard'}), name='order_workflow_dashboard'),
@@ -32,6 +32,7 @@ urlpatterns = [
     path('orders/payments_dashboard/', views.OrderViewSet.as_view({'get': 'payments_dashboard'}), name='payments_dashboard'),
     path('orders/<int:pk>/update_payment/', views.OrderViewSet.as_view({'patch': 'update_payment'}), name='update_payment'),
     path('orders/<int:pk>/mark_overdue/', views.OrderViewSet.as_view({'post': 'mark_payment_overdue'}), name='mark_payment_overdue'),
+    path('orders/<int:pk>/payment_transactions/', views.OrderViewSet.as_view({'get': 'payment_transactions'}), name='order_payment_transactions'),
     
     # Order actions
     path('orders/<int:pk>/advance_workflow/', views.OrderViewSet.as_view({'post': 'advance_workflow'}), name='advance_workflow'),

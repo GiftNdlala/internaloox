@@ -1303,7 +1303,7 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
                 } for t in task_updates]
         
         # Get stock alerts (basic implementation)
-        if user.role in ['warehouse_manager', 'admin', 'owner', 'warehouse_worker', 'warehouse']:
+        if user.role in ['admin', 'owner', 'warehouse_worker', 'warehouse', 'warehouse_manager']:
             try:
                 from inventory.models import Material
                 from django.db.models import F

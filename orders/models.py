@@ -407,6 +407,38 @@ class PaymentProof(models.Model):
     def __str__(self):
         return f"Payment Proof for Order #{self.order.order_number} - {self.payment_type}"
 
+
+class PaymentTransaction(models.Model):
+    """Immutable transaction record for payment updates on an order."""
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='payment_transactions')
+    actor_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='payment_transactions')
+    # Deltas captured for transparency
+    total_amount_delta = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    deposit_delta = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    balance_delta = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    # Summary of how much outstanding balance changed (old_balance - new_balance)
+    amount_delta = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    previous_balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    new_balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    payment_method = models.CharField(max_length=50, blank=True, null=True)
+    payment_status = models.CharField(max_length=20, blank=True, null=True)
+    proof = models.ForeignKey(PaymentProof, on_delete=models.SET_NULL, null=True, blank=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['order', 'created_at']),
+            models.Index(fields=['actor_user', 'created_at']),
+            models.Index(fields=['payment_method']),
+            models.Index(fields=['payment_status']),
+        ]
+    
+    def __str__(self):
+        return f"Txn #{self.id} for Order #{self.order.order_number}: Δ {self.amount_delta} (new balance {self.new_balance})"
+
+
 class OrderHistory(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='history')
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
