@@ -311,40 +311,40 @@ class UserViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         try:
-        instance = self.get_object()
-        user_role = request.user.role
-        
-        # Check role-based delete permissions
-        # Define permission matrix - same as create/update permissions
-        if user_role == 'owner':
-            # Owners can delete any role
-            allowed_roles = ['owner', 'admin', 'warehouse_worker', 'warehouse', 'delivery']
-        elif user_role == 'admin':
-            # Admins can delete warehouse_worker and delivery
-            allowed_roles = ['warehouse_worker', 'warehouse', 'delivery']
-        elif user_role == 'warehouse':
-            # Warehouse (manager) can only delete warehouse_worker
-            allowed_roles = ['warehouse_worker']
-        else:
-            # Other roles cannot delete users
-            allowed_roles = []
-        
-        # Check if user can delete this role
-        if instance.role not in allowed_roles:
-            return Response({
-                'error': f'Permission denied: {user_role} cannot delete {instance.role} users',
-                'allowed_roles': allowed_roles,
-                'your_role': user_role,
+            instance = self.get_object()
+            user_role = request.user.role
+            
+            # Check role-based delete permissions
+            # Define permission matrix - same as create/update permissions
+            if user_role == 'owner':
+                # Owners can delete any role
+                allowed_roles = ['owner', 'admin', 'warehouse_worker', 'warehouse', 'delivery']
+            elif user_role == 'admin':
+                # Admins can delete warehouse_worker and delivery
+                allowed_roles = ['warehouse_worker', 'warehouse', 'delivery']
+            elif user_role == 'warehouse':
+                # Warehouse (manager) can only delete warehouse_worker
+                allowed_roles = ['warehouse_worker']
+            else:
+                # Other roles cannot delete users
+                allowed_roles = []
+            
+            # Check if user can delete this role
+            if instance.role not in allowed_roles:
+                return Response({
+                    'error': f'Permission denied: {user_role} cannot delete {instance.role} users',
+                    'allowed_roles': allowed_roles,
+                    'your_role': user_role,
                     'target_user_role': instance.role,
                     'target_user_id': instance.id,
                     'target_username': instance.username
-            }, status=status.HTTP_403_FORBIDDEN)
-        
-        # Prevent deleting yourself
-        if instance.id == request.user.id:
-            return Response({
-                'error': 'You cannot delete your own account',
-                'suggestion': 'Ask another authorized user to delete your account if needed'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            # Prevent deleting yourself
+            if instance.id == request.user.id:
+                return Response({
+                    'error': 'You cannot delete your own account',
+                    'suggestion': 'Ask another authorized user to delete your account if needed'
                 }, status=status.HTTP_400_BAD_REQUEST)
             
             # Additional safety check - prevent deleting the last owner
@@ -354,17 +354,17 @@ class UserViewSet(viewsets.ModelViewSet):
                     return Response({
                         'error': 'Cannot delete the last owner account',
                         'suggestion': 'Create another owner account first before deleting this one'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        username = instance.username
-            user_id = instance.id
-        instance.delete()
-        
-        return Response({
-            'success': True,
-                'message': f'User "{username}" (ID: {user_id}) deleted successfully'
-        }, status=status.HTTP_204_NO_CONTENT)
+                    }, status=status.HTTP_400_BAD_REQUEST)
             
+            username = instance.username
+            user_id = instance.id
+            instance.delete()
+            
+            return Response({
+                'success': True,
+                'message': f'User "{username}" (ID: {user_id}) deleted successfully'
+            }, status=status.HTTP_204_NO_CONTENT)
+        
         except Exception as e:
             import traceback
             print(f"User deletion error: {str(e)}")
@@ -519,13 +519,13 @@ class CreateUserView(APIView):
             # Check role-based creation permissions - use same logic as UserViewSet
             if user_role == 'owner':
                 # Owners can create any role
-                allowed_roles = ['owner', 'admin', 'warehouse_manager', 'warehouse_worker', 'warehouse', 'delivery']
+                allowed_roles = ['owner', 'admin', 'warehouse_worker', 'warehouse', 'delivery']
             elif user_role == 'admin':
-                # Admins can create warehouse_manager, warehouse_worker, and delivery
-                allowed_roles = ['warehouse_manager', 'warehouse_worker', 'warehouse', 'delivery']
-            elif user_role == 'warehouse_manager':
-                # Warehouse managers can only create warehouse_worker
-                allowed_roles = ['warehouse_worker', 'warehouse']
+                # Admins can create warehouse_worker and delivery (and managers via canonical 'warehouse')
+                allowed_roles = ['warehouse_worker', 'warehouse', 'delivery']
+            elif user_role in ['warehouse_manager', 'warehouse']:
+                # Warehouse managers (canonical 'warehouse') can only create warehouse_worker
+                allowed_roles = ['warehouse_worker']
             else:
                 # Other roles cannot create users
                 allowed_roles = []

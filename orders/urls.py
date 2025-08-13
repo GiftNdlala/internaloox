@@ -18,7 +18,6 @@ router.register(r'order-items', views.OrderItemViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),
-    path('dashboard-stats/', views.dashboard_stats, name='dashboard_stats'),
     
     # Core workflow endpoints
     path('orders/workflow_dashboard/', views.OrderViewSet.as_view({'get': 'order_workflow_dashboard'}), name='order_workflow_dashboard'),
