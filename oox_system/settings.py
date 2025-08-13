@@ -11,7 +11,7 @@ SECRET_KEY = config('SECRET_KEY', default='django-insecure-your-secret-key-here'
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=True, cast=bool)
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '*.render.com', 'internaloox.onrender.com', 'internaloox-1.onrender.com', 'testserver']
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '*.render.com', 'internaloox.onrender.com', 'internaloox-1.onrender.com', 'internaloox-frontend.onrender.com', 'testserver']
 
 # Application definition
 INSTALLED_APPS = [
@@ -147,7 +147,6 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
     "https://internaloox-frontend.onrender.com",
-    "https://your-frontend-domain.com",
 ]
 
 # In production, allow all origins from .onrender.com
@@ -157,6 +156,11 @@ if not DEBUG:
     ]
 
 CORS_ALLOW_CREDENTIALS = True
+
+# CSRF trusted origins for cross-site requests (e.g., when using cookies)
+CSRF_TRUSTED_ORIGINS = [
+    "https://internaloox-frontend.onrender.com",
+]
 
 # Custom user model
 AUTH_USER_MODEL = 'users.User'
