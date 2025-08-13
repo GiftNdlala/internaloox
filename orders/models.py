@@ -396,7 +396,7 @@ class PaymentProof(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='payment_proofs')
     payment_type = models.CharField(max_length=50)  # e.g., "Final Payment", "Balance Payment"
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    proof_image = models.ImageField(upload_to='payment_proofs/')
+    proof_image = models.FileField(upload_to='payment_proofs/')
     uploaded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
     notes = models.TextField(blank=True)
@@ -406,6 +406,24 @@ class PaymentProof(models.Model):
     
     def __str__(self):
         return f"Payment Proof for Order #{self.order.order_number} - {self.payment_type}"
+
+    def clean(self):
+        """Restrict uploads to images or PDFs."""
+        file = self.proof_image
+        if not file:
+            return
+        allowed_exts = {'.pdf', '.png', '.jpg', '.jpeg'}
+        name_lower = (getattr(file, 'name', '') or '').lower()
+        from os.path import splitext
+        _, ext = splitext(name_lower)
+        if ext not in allowed_exts:
+            from django.core.exceptions import ValidationError
+            raise ValidationError({'proof_image': f'Unsupported file type: {ext or "(none)"}. Allowed: pdf, png, jpg, jpeg'})
+        # Best-effort content-type check if available
+        content_type = getattr(file, 'content_type', None)
+        if content_type and not (content_type.startswith('image/') or content_type == 'application/pdf'):
+            from django.core.exceptions import ValidationError
+            raise ValidationError({'proof_image': f'Unsupported content-type: {content_type}. Allowed: image/* or application/pdf'})
 
 
 class PaymentTransaction(models.Model):
