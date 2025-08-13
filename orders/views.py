@@ -1356,6 +1356,251 @@ class OrderViewSet(viewsets.ModelViewSet):
             }
         })
 
+    @action(detail=True, methods=['patch'])
+    def update_payment(self, request, pk=None):
+        """Update payment information for an order"""
+        try:
+            order = self.get_object()
+            user = request.user
+            
+            # Check permissions - Owner and Admin can update payments
+            if user.role not in ['owner', 'admin']:
+                return Response({
+                    'error': 'Permission denied: Only Owner and Admin can update payments'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            # Extract payment data with proper type conversion
+            total_amount = request.data.get('total_amount')
+            deposit_amount = request.data.get('deposit_amount') 
+            balance_amount = request.data.get('balance_amount')
+            payment_status = request.data.get('payment_status')
+            payment_method = request.data.get('payment_method', '')
+            payment_notes = request.data.get('payment_notes', '')
+            proof_id = request.data.get('proof_id')
+            
+            # Convert string amounts to Decimal if provided
+            from decimal import Decimal, InvalidOperation
+            try:
+                if total_amount is not None:
+                    total_amount = Decimal(str(total_amount))
+                if deposit_amount is not None:
+                    deposit_amount = Decimal(str(deposit_amount))
+                if balance_amount is not None:
+                    balance_amount = Decimal(str(balance_amount))
+            except (InvalidOperation, ValueError) as e:
+                return Response({
+                    'error': f'Invalid amount format: {str(e)}'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Store old values for logging
+            old_values = {
+                'total_amount': order.total_amount,
+                'deposit_amount': order.deposit_amount,
+                'balance_amount': order.balance_amount,
+                'payment_status': order.payment_status
+            }
+            
+            # Enforce EFT proof-of-payment if mandated
+            if (payment_method or order.payment_method) and (payment_method or order.payment_method).upper() == 'EFT':
+                # If client sends proof_id, validate linkage; otherwise require a recent proof for this order
+                recent_proof = None
+                if proof_id:
+                    try:
+                        recent_proof = PaymentProof.objects.get(id=proof_id, order=order)
+                    except PaymentProof.DoesNotExist:
+                        return Response({
+                            'error': 'Invalid payment proof: proof_id not found for this order',
+                            'required_fields': ['proof_id']
+                        }, status=status.HTTP_400_BAD_REQUEST)
+                else:
+                    from django.utils import timezone
+                    recent_window_minutes = 60
+                    recent_cutoff = timezone.now() - timedelta(minutes=recent_window_minutes)
+                    recent_proof = order.payment_proofs.filter(uploaded_at__gte=recent_cutoff).first()
+                    if not recent_proof:
+                        return Response({
+                            'error': 'Payment proof required for EFT payments',
+                            'detail': 'Upload payment proof and include proof_id, or upload within the last 60 minutes before updating payment.',
+                            'required_fields': ['proof_id']
+                        }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Update payment fields
+            changes = []
+            if total_amount is not None:
+                order.total_amount = total_amount
+                changes.append(f"Total amount: R{old_values['total_amount']} → R{total_amount}")
+            
+            if deposit_amount is not None:
+                order.deposit_amount = deposit_amount
+                changes.append(f"Deposit amount: R{old_values['deposit_amount']} → R{deposit_amount}")
+            
+            if balance_amount is not None:
+                order.balance_amount = balance_amount
+                changes.append(f"Balance amount: R{old_values['balance_amount']} → R{balance_amount}")
+            
+            if payment_status is not None:
+                # Validate payment status
+                valid_statuses = [choice[0] for choice in Order.PAYMENT_STATUS_CHOICES]
+                if payment_status not in valid_statuses:
+                    return Response({
+                        'error': f'Invalid payment status: {payment_status}. Valid statuses: {", ".join(valid_statuses)}'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                order.payment_status = payment_status
+                changes.append(f"Payment status: {old_values['payment_status']} → {payment_status}")
+                
+                # Special handling for deposit paid status
+                if payment_status == 'deposit_paid' and not order.deposit_paid_date:
+                    from django.utils import timezone
+                    order.deposit_paid_date = timezone.now()
+                    order.order_status = 'deposit_paid'
+                    changes.append("Activated production queue (deposit paid)")
+            
+            # Update additional payment fields if provided
+            if payment_method:
+                order.payment_method = payment_method
+                changes.append(f"Payment method: {payment_method}")
+            
+            if payment_notes:
+                order.payment_notes = payment_notes
+                changes.append("Payment notes updated")
+            
+            # Validate that amounts make sense
+            if total_amount is not None and deposit_amount is not None:
+                if deposit_amount > total_amount:
+                    return Response({
+                        'error': 'Deposit amount cannot be greater than total amount'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            
+            if balance_amount is not None and total_amount is not None:
+                if balance_amount > total_amount:
+                    return Response({
+                        'error': 'Balance amount cannot be greater than total amount'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Compute deltas for transaction log
+            deposit_delta = (order.deposit_amount - old_values['deposit_amount']) if deposit_amount is not None else 0
+            balance_delta = (order.balance_amount - old_values['balance_amount']) if balance_amount is not None else 0
+            total_delta = (order.total_amount - old_values['total_amount']) if total_amount is not None else 0
+            previous_balance = old_values['balance_amount']
+            new_balance = order.balance_amount if balance_amount is not None else previous_balance
+            amount_delta = previous_balance - new_balance  # positive means outstanding reduced
+            
+            order.save()
+            
+            # Log the payment update
+            if changes:
+                OrderHistory.objects.create(
+                    order=order,
+                    user=user,
+                    action="Payment updated",
+                    details="; ".join(changes)
+                )
+            
+            # Persist transaction record for owner dashboard
+            proof_obj = None
+            if proof_id:
+                try:
+                    proof_obj = PaymentProof.objects.get(id=proof_id, order=order)
+                except PaymentProof.DoesNotExist:
+                    proof_obj = None
+            from .models import PaymentTransaction
+            PaymentTransaction.objects.create(
+                order=order,
+                actor_user=user,
+                total_amount_delta=total_delta,
+                deposit_delta=deposit_delta,
+                balance_delta=balance_delta,
+                amount_delta=amount_delta,
+                previous_balance=previous_balance,
+                new_balance=new_balance,
+                payment_method=order.payment_method,
+                payment_status=order.payment_status,
+                proof=proof_obj,
+                notes=payment_notes or ''
+            )
+            
+            return Response({
+                'message': 'Payment updated successfully',
+                'order_number': order.order_number,
+                'total_amount': order.total_amount,
+                'deposit_amount': order.deposit_amount,
+                'balance_amount': order.balance_amount,
+                'payment_status': order.payment_status,
+                'changes': changes
+            })
+            
+        except Exception as e:
+            import traceback
+            print(f"Payment update error: {str(e)}")
+            print(f"Traceback: {traceback.format_exc()}")
+            return Response({
+                'error': f'Payment update failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['get'])
+    def payment_transactions(self, request, pk=None):
+        """List payment transactions for a specific order."""
+        order = self.get_object()
+        from .models import PaymentTransaction
+        txns = PaymentTransaction.objects.filter(order=order).select_related('actor_user', 'proof', 'order')
+        from .serializers import PaymentTransactionSerializer
+        page = self.paginate_queryset(txns)
+        if page is not None:
+            serializer = PaymentTransactionSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = PaymentTransactionSerializer(txns, many=True)
+        return Response(serializer.data)
+
+
+class PaymentTransactionViewSet(viewsets.ReadOnlyModelViewSet):
+    """Global read-only view of all payment transactions with filters for owner dashboard."""
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    ordering = ['-created_at']
+    search_fields = ['order__order_number', 'actor_user__username', 'payment_method', 'payment_status', 'notes']
+    ordering_fields = ['created_at', 'amount_delta', 'new_balance']
+
+    def get_queryset(self):
+        from .models import PaymentTransaction
+        qs = PaymentTransaction.objects.select_related('order', 'actor_user', 'proof')
+        params = self.request.query_params
+        if params.get('order'):
+            qs = qs.filter(order_id=params.get('order'))
+        if params.get('customer'):
+            qs = qs.filter(order__customer_name__icontains=params.get('customer'))
+        if params.get('method'):
+            qs = qs.filter(payment_method__iexact=params.get('method'))
+        if params.get('status'):
+            qs = qs.filter(payment_status__iexact=params.get('status'))
+        if params.get('user'):
+            qs = qs.filter(actor_user_id=params.get('user'))
+        from django.utils import timezone
+        from datetime import datetime
+        if params.get('since'):
+            qs = qs.filter(created_at__date__gte=params.get('since'))
+        if params.get('until'):
+            qs = qs.filter(created_at__date__lte=params.get('until'))
+        return qs
+
+    def list(self, request, *args, **kwargs):
+        from .serializers import PaymentTransactionSerializer
+        queryset = self.get_queryset()
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = PaymentTransactionSerializer(page, many=True)
+            # Add aggregates
+            total_amount_delta = sum([t.amount_delta for t in page]) if page else 0
+            response = self.get_paginated_response(serializer.data)
+            response.data.update({
+                'aggregates': {
+                    'total_amount_delta': float(total_amount_delta)
+                }
+            })
+            return response
+        serializer = PaymentTransactionSerializer(queryset, many=True)
+        return Response(serializer.data)
+
 class PaymentProofViewSet(viewsets.ModelViewSet):
     queryset = PaymentProof.objects.all()
     serializer_class = PaymentProofSerializer
