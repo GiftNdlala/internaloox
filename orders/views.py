@@ -1363,20 +1363,33 @@ class OrderViewSet(viewsets.ModelViewSet):
             order = self.get_object()
             user = request.user
             
+            # Debug logging
+            print(f"Payment update request for order {pk}:")
+            print(f"Request data: {request.data}")
+            print(f"User: {user.username} (role: {user.role})")
+            
             # Check permissions - Owner and Admin can update payments
             if user.role not in ['owner', 'admin']:
                 return Response({
                     'error': 'Permission denied: Only Owner and Admin can update payments'
                 }, status=status.HTTP_403_FORBIDDEN)
             
-            # Extract payment data with proper type conversion
-            total_amount = request.data.get('total_amount')
-            deposit_amount = request.data.get('deposit_amount') 
-            balance_amount = request.data.get('balance_amount')
-            payment_status = request.data.get('payment_status')
-            payment_method = request.data.get('payment_method', '')
-            payment_notes = request.data.get('payment_notes', '')
+            # Extract payment data with proper type conversion and field mapping
+            # Handle both direct field names and aliases
+            total_amount = request.data.get('total_amount') or request.data.get('total')
+            deposit_amount = request.data.get('deposit_amount') or request.data.get('deposit')
+            balance_amount = request.data.get('balance_amount') or request.data.get('balance')
+            payment_status = request.data.get('payment_status') or request.data.get('status')
+            payment_method = request.data.get('payment_method') or request.data.get('method', '')
+            payment_notes = request.data.get('payment_notes') or request.data.get('notes', '')
             proof_id = request.data.get('proof_id')
+            
+            print(f"Extracted values:")
+            print(f"  total_amount: {total_amount} (type: {type(total_amount)})")
+            print(f"  deposit_amount: {deposit_amount} (type: {type(deposit_amount)})")
+            print(f"  balance_amount: {balance_amount} (type: {type(balance_amount)})")
+            print(f"  payment_status: {payment_status}")
+            print(f"  payment_method: {payment_method}")
             
             # Convert string amounts to Decimal if provided
             from decimal import Decimal, InvalidOperation
@@ -1455,6 +1468,11 @@ class OrderViewSet(viewsets.ModelViewSet):
                     order.deposit_paid_date = timezone.now()
                     order.order_status = 'deposit_paid'
                     changes.append("Activated production queue (deposit paid)")
+                
+                # Special handling for fully_paid status
+                elif payment_status == 'fully_paid':
+                    order.order_status = 'order_ready'
+                    changes.append("Order marked as fully paid - ready for production")
             
             # Update additional payment fields if provided
             if payment_method:
@@ -1487,6 +1505,8 @@ class OrderViewSet(viewsets.ModelViewSet):
             amount_delta = previous_balance - new_balance  # positive means outstanding reduced
             
             order.save()
+            
+            print(f"Payment update successful. Changes: {changes}")
             
             # Log the payment update
             if changes:

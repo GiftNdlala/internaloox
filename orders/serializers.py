@@ -3,6 +3,8 @@ from .models import Order, Customer, PaymentProof, PaymentTransaction, OrderHist
 from users.serializers import UserSerializer
 from decimal import Decimal
 import mimetypes
+import uuid
+import time
 
 class CustomerSerializer(serializers.ModelSerializer):
 	class Meta:
@@ -320,6 +322,10 @@ class ProductSerializer(serializers.ModelSerializer):
 		sku = validated_data.pop('sku', '').strip() if 'sku' in validated_data else (self.initial_data.get('sku', '').strip() if hasattr(self, 'initial_data') else '')
 		attributes = validated_data.pop('attributes', validated_data.get('attributes', None))
 
+		# Auto-generate SKU if not provided
+		if not sku:
+			sku = f"OOX-{uuid.uuid4().hex[:8].upper()}-{int(time.time()) % 10000:04d}"
+
 		# Ensure final mappings already handled in validate; just enforce unit_price
 		validated_data['unit_price'] = price
 		if sku and not validated_data.get('model_code'):
@@ -332,15 +338,38 @@ class ProductSerializer(serializers.ModelSerializer):
 
 		# Persist color/fabric as options (legacy simple storage)
 		from .models import ProductOption
+		
 		# Build unique sets from singletons + arrays
 		color_values = {v.strip() for v in ([color_name] if color_name else []) + list(color_list) if isinstance(v, str) and v.strip()}
 		fabric_values = {v.strip() for v in ([fabric_name] if fabric_name else []) + list(fabric_list) if isinstance(v, str) and v.strip()}
+		
+		# Handle numeric color/fabric IDs from frontend
+		if color_list and all(isinstance(c, (int, float)) for c in color_list):
+			# Frontend sent numeric IDs, fetch color names
+			try:
+				color_objects = Color.objects.filter(id__in=color_list)
+				color_values.update([c.name for c in color_objects])
+			except Exception as e:
+				print(f"Error fetching colors by ID: {e}")
+		
+		if fabric_list and all(isinstance(f, (int, float)) for f in fabric_list):
+			# Frontend sent numeric IDs, fetch fabric names
+			try:
+				fabric_objects = Fabric.objects.filter(id__in=fabric_list)
+				fabric_values.update([f.name for f in fabric_objects])
+			except Exception as e:
+				print(f"Error fetching fabrics by ID: {e}")
+		
+		# Create color and fabric options
 		for cv in color_values:
-			Color.objects.get_or_create(name=cv)
-			ProductOption.objects.get_or_create(product=product, option_type='color', value=cv)
+			if cv:  # Only create if not empty
+				color_obj, _ = Color.objects.get_or_create(name=cv)
+				ProductOption.objects.get_or_create(product=product, option_type='color', value=cv)
+		
 		for fv in fabric_values:
-			Fabric.objects.get_or_create(name=fv)
-			ProductOption.objects.get_or_create(product=product, option_type='fabric', value=fv)
+			if fv:  # Only create if not empty
+				fabric_obj, _ = Fabric.objects.get_or_create(name=fv)
+				ProductOption.objects.get_or_create(product=product, option_type='fabric', value=fv)
 
 		# Attach currency and echo fields for response
 		self._response_currency = currency
