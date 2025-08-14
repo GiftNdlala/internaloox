@@ -1504,6 +1504,15 @@ class OrderViewSet(viewsets.ModelViewSet):
             new_balance = order.balance_amount if balance_amount is not None else previous_balance
             amount_delta = previous_balance - new_balance  # positive means outstanding reduced
             
+            # Auto-calculate balance if not explicitly set
+            if balance_amount is None and deposit_amount is not None:
+                # If only deposit is updated, recalculate balance
+                order.balance_amount = order.total_amount - order.deposit_amount
+                balance_delta = order.balance_amount - old_values['balance_amount']
+                new_balance = order.balance_amount
+                amount_delta = previous_balance - new_balance
+                changes.append(f"Balance recalculated: R{old_values['balance_amount']} → R{order.balance_amount}")
+            
             order.save()
             
             print(f"Payment update successful. Changes: {changes}")
@@ -1529,8 +1538,8 @@ class OrderViewSet(viewsets.ModelViewSet):
                 order=order,
                 actor_user=user,
                 total_amount_delta=total_delta,
-                deposit_delta=deposit_amount - old_values['deposit_amount'] if deposit_amount is not None else deposit_delta,
-                balance_delta=balance_amount - old_values['balance_amount'] if balance_amount is not None else balance_delta,
+                deposit_delta=deposit_delta,
+                balance_delta=balance_delta,
                 amount_delta=amount_delta,
                 previous_balance=previous_balance,
                 new_balance=new_balance,
@@ -1578,6 +1587,40 @@ class OrderViewSet(viewsets.ModelViewSet):
             return self.get_paginated_response(serializer.data)
         serializer = PaymentTransactionSerializer(txns, many=True)
         return Response(serializer.data)
+
+
+    @action(detail=False, methods=['get'], url_path='payments_dashboard')
+    def payments_dashboard(self, request):
+        """Get payment dashboard data"""
+        try:
+            # Get payment statistics
+            total_orders = Order.objects.count()
+            pending_orders = Order.objects.filter(payment_status='deposit_pending').count()
+            partial_orders = Order.objects.filter(payment_status='deposit_paid').count()
+            paid_orders = Order.objects.filter(payment_status='fully_paid').count()
+            overdue_orders = Order.objects.filter(payment_status='overdue').count()
+            
+            # Calculate totals
+            total_amount = Order.objects.aggregate(total=models.Sum('total_amount'))['total'] or 0
+            total_deposits = Order.objects.aggregate(total=models.Sum('deposit_amount'))['total'] or 0
+            total_balance = Order.objects.aggregate(total=models.Sum('balance_amount'))['total'] or 0
+            
+            return Response({
+                'stats': {
+                    'total': total_orders,
+                    'pending': pending_orders,
+                    'partial': partial_orders,
+                    'paid': paid_orders,
+                    'overdue': overdue_orders
+                },
+                'totals': {
+                    'total_amount': float(total_amount),
+                    'total_deposits': float(total_deposits),
+                    'total_balance': float(total_balance)
+                }
+            })
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class PaymentTransactionViewSet(viewsets.ReadOnlyModelViewSet):
