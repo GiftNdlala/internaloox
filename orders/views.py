@@ -1271,15 +1271,15 @@ class OrderViewSet(viewsets.ModelViewSet):
                 from inventory.models import Material
                 from django.db.models import F
                 low_stock_materials = Material.objects.filter(
-                    current_stock__lte=F('minimum_stock_level')
+                    current_stock__lte=F('minimum_stock')
                 )[:10]
                 
                 for material in low_stock_materials:
                     stock_alerts.append({
                         'material_name': material.name,
                         'current_stock': material.current_stock,
-                        'minimum_level': material.minimum_stock_level,
-                        'shortage': material.minimum_stock_level - material.current_stock
+                        'minimum_level': material.minimum_stock,
+                        'shortage': material.minimum_stock - material.current_stock
                     })
             except ImportError:
                 # Inventory system not available
