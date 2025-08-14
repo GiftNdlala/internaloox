@@ -1505,12 +1505,12 @@ class OrderViewSet(viewsets.ModelViewSet):
                 except PaymentProof.DoesNotExist:
                     proof_obj = None
             from .models import PaymentTransaction
-            PaymentTransaction.objects.create(
+            transaction = PaymentTransaction.objects.create(
                 order=order,
                 actor_user=user,
                 total_amount_delta=total_delta,
-                deposit_delta=deposit_delta,
-                balance_delta=balance_delta,
+                deposit_delta=deposit_amount - old_values['deposit_amount'] if deposit_amount is not None else deposit_delta,
+                balance_delta=balance_amount - old_values['balance_amount'] if balance_amount is not None else balance_delta,
                 amount_delta=amount_delta,
                 previous_balance=previous_balance,
                 new_balance=new_balance,
@@ -1520,12 +1520,19 @@ class OrderViewSet(viewsets.ModelViewSet):
                 notes=payment_notes or ''
             )
             
+            from .serializers import PaymentTransactionSerializer
+            txn_data = PaymentTransactionSerializer(transaction).data
+            order_data = OrderListSerializer(order).data
             return Response({
                 'message': 'Payment updated successfully',
                 'order_number': order.order_number,
-                'total_amount': order.total_amount,
-                'deposit_amount': order.deposit_amount,
-                'balance_amount': order.balance_amount,
+                'order': order_data,
+                'transaction': txn_data,
+                'totals': {
+                    'total_amount': float(order.total_amount),
+                    'deposit_amount': float(order.deposit_amount),
+                    'balance_amount': float(order.balance_amount)
+                },
                 'payment_status': order.payment_status,
                 'changes': changes
             })
