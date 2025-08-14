@@ -62,7 +62,7 @@ class Material(models.Model):
     ]
     
     name = models.CharField(max_length=200)
-    category = models.ForeignKey(MaterialCategory, on_delete=models.CASCADE, related_name='materials')
+    category = models.ForeignKey(MaterialCategory, on_delete=models.SET_NULL, null=True, blank=True, related_name='materials')
     description = models.TextField(blank=True, null=True)
     unit = models.CharField(max_length=20, choices=UNIT_CHOICES)
     
@@ -93,7 +93,7 @@ class Material(models.Model):
     
     class Meta:
         ordering = ['category', 'name']
-        unique_together = ['name', 'category']
+        unique_together = ['name']
     
     def __str__(self):
         return f"{self.name} ({self.get_unit_display()})"
