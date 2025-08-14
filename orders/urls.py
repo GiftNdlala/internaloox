@@ -20,36 +20,31 @@ router.register(r'payments/transactions', views.PaymentTransactionViewSet, basen
 urlpatterns = [
     path('', include(router.urls)),
     
-    # Core workflow endpoints
-    path('orders/workflow_dashboard/', views.OrderViewSet.as_view({'get': 'order_workflow_dashboard'}), name='order_workflow_dashboard'),
-    path('orders/management_data/', views.OrderViewSet.as_view({'get': 'order_management_data'}), name='order_management_data'),
+    # Status options
     path('orders/status_options/', views.OrderViewSet.as_view({'get': 'status_options'}), name='status_options'),
-    # Aliases without the extra 'orders/' segment for frontend compatibility
-    path('management_data/', views.OrderViewSet.as_view({'get': 'order_management_data'}), name='order_management_data_alias'),
     path('status_options/', views.OrderViewSet.as_view({'get': 'status_options'}), name='status_options_alias'),
-    
-    # Payment management endpoints
-    path('orders/payments_dashboard/', views.OrderViewSet.as_view({'get': 'payments_dashboard'}), name='payments_dashboard'),
+
+    # Payments
     path('orders/<int:pk>/update_payment/', views.OrderViewSet.as_view({'patch': 'update_payment'}), name='update_payment'),
-    path('orders/<int:pk>/mark_overdue/', views.OrderViewSet.as_view({'post': 'mark_payment_overdue'}), name='mark_payment_overdue'),
     path('orders/<int:pk>/payment_transactions/', views.OrderViewSet.as_view({'get': 'payment_transactions'}), name='order_payment_transactions'),
-    
-    # Order actions
-    path('orders/<int:pk>/advance_workflow/', views.OrderViewSet.as_view({'post': 'advance_workflow'}), name='advance_workflow'),
-    path('orders/<int:pk>/assign/', views.OrderViewSet.as_view({'post': 'assign_order'}), name='assign_order'),
-    path('orders/<int:pk>/cancel/', views.OrderViewSet.as_view({'post': 'cancel_order'}), name='cancel_order'),
-    path('orders/<int:pk>/update_status/', views.OrderViewSet.as_view({'patch': 'update_status'}), name='update_order_status'),
-    path('orders/<int:pk>/update_production_status/', views.OrderViewSet.as_view({'post': 'update_production_status'}), name='update_production_status'),
+    path('reports/payments_data/', views.OrderViewSet.as_view({'get': 'payments_data'}), name='payments_data'),
+
+    # Invoice/Delivery note data
+    path('orders/<int:pk>/invoice_data/', views.OrderViewSet.as_view({'get': 'invoice_data'}), name='invoice_data'),
+    path('orders/<int:pk>/delivery_note_data/', views.OrderViewSet.as_view({'get': 'delivery_note_data'}), name='delivery_note_data'),
+
+    # Proof of payment signed access
+    path('payment-proofs/signed_file/', views.payment_proof_signed_file, name='paymentproof-signed-file'),
+
+    # Dashboards/analytics
     path('orders/warehouse_analytics/', views.OrderViewSet.as_view({'get': 'warehouse_analytics'}), name='warehouse_analytics'),
-    
-    # Role-based dashboard endpoints
     path('orders/owner_dashboard/', views.OrderViewSet.as_view({'get': 'owner_dashboard_orders'}), name='owner_dashboard_orders'),
     path('orders/admin_dashboard/', views.OrderViewSet.as_view({'get': 'admin_dashboard_orders'}), name='admin_dashboard_orders'),
     path('orders/admin_warehouse_overview/', views.OrderViewSet.as_view({'get': 'admin_warehouse_overview'}), name='admin_warehouse_overview'),
     path('orders/warehouse_dashboard/', views.OrderViewSet.as_view({'get': 'warehouse_dashboard_orders'}), name='warehouse_dashboard_orders'),
     path('orders/delivery_dashboard/', views.OrderViewSet.as_view({'get': 'delivery_dashboard_orders'}), name='delivery_dashboard_orders'),
-    
-    # Legacy/existing endpoints
+
+    # Legacy helpers
     path('orders/warehouse_orders/', views.OrderViewSet.as_view({'get': 'warehouse_orders'}), name='warehouse_orders'),
     path('orders/<int:pk>/create_task/', views.OrderViewSet.as_view({'post': 'create_task'}), name='order_create_task'),
     path('orders/<int:pk>/escalate_priority/', views.OrderViewSet.as_view({'post': 'escalate_priority'}), name='escalate_priority'),

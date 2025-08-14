@@ -1308,7 +1308,7 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
                 from inventory.models import Material
                 from django.db.models import F
                 stock_alerts = Material.objects.filter(
-                    current_stock__lte=F('minimum_stock_level')
+                    current_stock__lte=F('minimum_stock')
                 )[:10]
                 if stock_alerts.exists():
                     updates['has_updates'] = True
@@ -1316,7 +1316,7 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
                         'id': m.id,
                         'name': m.name,
                         'current_stock': m.current_stock,
-                        'minimum_stock_level': m.minimum_stock_level,
+                        'minimum_stock_level': m.minimum_stock,
                         'unit': m.unit
                     } for m in stock_alerts]
             except:
