@@ -73,8 +73,9 @@ class MaterialSerializer(serializers.ModelSerializer):
             try:
                 default_cat, _ = MaterialCategory.objects.get_or_create(name='other', defaults={'is_active': True})
                 attrs['category'] = default_cat
-            except Exception:
+            except Exception as e:
                 # If category creation fails, allow material without category
+                print(f"Category creation failed: {e}")
                 pass
         return super().validate(attrs)
 
