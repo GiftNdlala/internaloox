@@ -61,15 +61,18 @@ class MaterialSerializer(serializers.ModelSerializer):
         # Map unit_price -> cost_per_unit
         if 'unit_price' in initial and initial.get('unit_price') not in [None, '']:
             attrs['cost_per_unit'] = initial.get('unit_price')
-        # Map category_id -> category
+        # Map category_id -> category (MaterialCategory instance)
         if 'category_id' in initial and initial.get('category_id'):
-            attrs['category'] = initial.get('category_id')
+            try:
+                category_obj = MaterialCategory.objects.get(pk=initial.get('category_id'))
+                attrs['category'] = category_obj
+            except MaterialCategory.DoesNotExist:
+                pass
         # Default category to 'other' if none provided
         if not attrs.get('category') and not initial.get('category') and not initial.get('category_id'):
             try:
-                from .models import MaterialCategory
                 default_cat, _ = MaterialCategory.objects.get_or_create(name='other', defaults={'is_active': True})
-                attrs['category'] = default_cat.id
+                attrs['category'] = default_cat
             except Exception:
                 pass
         return super().validate(attrs)

@@ -1,7 +1,7 @@
 from django.shortcuts import render
 import sys
 import traceback
-from django.http import JsonResponse
+from django.http import JsonResponse, FileResponse, HttpResponse, Http404
 from rest_framework import status, viewsets, filters
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import AllowAny, IsAuthenticated, IsAuthenticatedOrReadOnly
@@ -9,7 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
-from datetime import timedelta
+from datetime import timedelta, datetime
 from .models import Order, Customer, PaymentProof, OrderHistory, Product, Color, Fabric, OrderItem, ColorReference, FabricReference
 from .serializers import (
     OrderSerializer, OrderListSerializer, OrderStatusUpdateSerializer,
@@ -1612,6 +1612,73 @@ class PaymentProofViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(uploaded_by=self.request.user)
 
+    @action(detail=True, methods=['get'], url_path='file')
+    def stream_file(self, request, pk=None):
+        """Stream the stored file (PDF or image) with inline disposition."""
+        proof = self.get_object()
+        if not proof.proof_image:
+            raise Http404('File not found')
+        file = proof.proof_image.open('rb')
+        from mimetypes import guess_type
+        ctype, _ = guess_type(proof.proof_image.name)
+        response = FileResponse(file, content_type=ctype or 'application/octet-stream')
+        response['Content-Disposition'] = f"inline; filename=\"{proof.proof_image.name}\""
+        return response
+
+    @action(detail=True, methods=['get'], url_path='signed_url')
+    def signed_url(self, request, pk=None):
+        """Return a short-lived signed URL for direct file access."""
+        from django.core.signing import TimestampSigner, BadSignature, SignatureExpired
+        from django.conf import settings
+        from django.urls import reverse
+        expires = int(request.query_params.get('expires', '300'))
+        if expires < 60:
+            expires = 60
+        if expires > 3600:
+            expires = 3600
+        proof = self.get_object()
+        signer = TimestampSigner()
+        token = signer.sign(f"proof:{proof.id}")
+        url_path = reverse('orders:paymentproof-signed-file')
+        absolute = request.build_absolute_uri(f"{url_path}?token={token}&expires={expires}")
+        return Response({'url': absolute, 'expires_at': (timezone.now() + timedelta(seconds=expires)).isoformat()})
+
+
+# Public (signed) file access view
+@api_view(['GET'])
+@permission_classes([AllowAny])
+
+def payment_proof_signed_file(request):
+    """Validate signed token and stream file inline."""
+    from django.core.signing import TimestampSigner, BadSignature, SignatureExpired
+    from django.utils.http import urlsafe_base64_decode
+    from django.shortcuts import get_object_or_404
+    from mimetypes import guess_type
+    from .models import PaymentProof
+    from io import BufferedReader
+    # Validate token
+    token = request.query_params.get('token')
+    expires = int(request.query_params.get('expires', '300'))
+    if not token:
+        return Response({'error': 'token is required'}, status=status.HTTP_400_BAD_REQUEST)
+    signer = TimestampSigner()
+    try:
+        value = signer.unsign(token, max_age=expires)
+        prefix, proof_id_str = value.split(':', 1)
+        if prefix != 'proof':
+            return Response({'error': 'Invalid token'}, status=status.HTTP_400_BAD_REQUEST)
+        proof_id = int(proof_id_str)
+    except (BadSignature, SignatureExpired, ValueError):
+        return Response({'error': 'Invalid or expired token'}, status=status.HTTP_400_BAD_REQUEST)
+    # Fetch proof
+    proof = get_object_or_404(PaymentProof, id=proof_id)
+    if not proof.proof_image:
+        raise Http404('File not found')
+    file = proof.proof_image.open('rb')
+    ctype, _ = guess_type(proof.proof_image.name)
+    response = FileResponse(file, content_type=ctype or 'application/octet-stream')
+    response['Content-Disposition'] = f"inline; filename=\"{proof.proof_image.name}\""
+    return response
 
 class OrderHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = OrderHistory.objects.all()
