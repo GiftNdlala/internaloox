@@ -120,6 +120,8 @@ class StockMovementSerializer(serializers.ModelSerializer):
     # Frontend alias fields
     direction = serializers.CharField(write_only=True, required=False)
     note = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    # Make movement_type not required since it's set through direction mapping
+    movement_type = serializers.CharField(required=False)
 
     class Meta:
         model = StockMovement
