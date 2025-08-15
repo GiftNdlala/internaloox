@@ -135,14 +135,21 @@ class StockMovementSerializer(serializers.ModelSerializer):
             if direction not in ['in', 'out']:
                 raise serializers.ValidationError({'direction': 'Must be "in" or "out"'})
             attrs['movement_type'] = direction
+        
+        # Ensure reason is provided
+        if not attrs.get('reason') and not initial.get('reason'):
+            raise serializers.ValidationError({'reason': 'This field is required.'})
+        
         # unit_cost required only for 'in'
         movement_type = attrs.get('movement_type') or direction
         if movement_type == 'in':
             if initial.get('unit_cost') in [None, '', '0'] and not attrs.get('unit_cost'):
                 raise serializers.ValidationError({'unit_cost': 'unit_cost is required for stock-in'})
+        
         # Map note -> notes
         if 'note' in initial and initial.get('note') is not None:
             attrs['notes'] = initial.get('note')
+        
         return super().validate(attrs)
 
     def create(self, validated_data):
