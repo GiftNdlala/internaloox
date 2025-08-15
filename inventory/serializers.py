@@ -204,8 +204,6 @@ class ProductSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category', read_only=True)
     available_colors = serializers.JSONField(read_only=True)
     available_fabrics = serializers.JSONField(read_only=True)
-    stock_status = serializers.CharField(read_only=True)
-    total_value = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     
     # Frontend compatibility fields
     unit_price = serializers.DecimalField(source='unit_price', max_digits=10, decimal_places=2, read_only=True)
@@ -216,7 +214,7 @@ class ProductSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'product_name', 'model_code', 'description', 'category',
             'category_name', 'product_type', 'unit_price', 'unit_cost',
-            'available_colors', 'available_fabrics', 'stock_status', 'total_value',
+            'available_colors', 'available_fabrics', 'stock', 'base_price',
             'is_active', 'available_for_order', 'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at', 'available_colors', 'available_fabrics']
@@ -228,6 +226,11 @@ class ProductSerializer(serializers.ModelSerializer):
             data['available_colors'] = []
         if not data.get('available_fabrics'):
             data['available_fabrics'] = []
+        
+        # Add computed fields for frontend compatibility
+        data['stock_status'] = 'in_stock' if (data.get('stock') or 0) > 0 else 'out_of_stock'
+        data['total_value'] = float((data.get('stock') or 0) * (data.get('unit_cost') or 0))
+        
         return data
 
 

@@ -10,6 +10,8 @@ from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
 from datetime import timedelta, datetime
+from decimal import Decimal
+from django.db.models import F, Sum, Q, Count
 from .models import Order, Customer, PaymentProof, OrderHistory, Product, Color, Fabric, OrderItem, ColorReference, FabricReference
 from .serializers import (
     OrderSerializer, OrderListSerializer, OrderStatusUpdateSerializer,
@@ -1848,9 +1850,6 @@ class OrderItemViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Access denied: Warehouse access required'}, status=status.HTTP_403_FORBIDDEN)
         
         try:
-            from django.db.models import Count, Sum, Q
-            from django.utils import timezone
-            from datetime import timedelta
             from inventory.models import Material, StockMovement
             from tasks.models import Task
             
@@ -1862,7 +1861,6 @@ class OrderItemViewSet(viewsets.ModelViewSet):
             # Stock Analytics
             stock_analytics = {}
             try:
-                from decimal import Decimal
                 materials = Material.objects.filter(is_active=True)
                 stock_analytics = {
                     'total_materials': materials.count(),
@@ -1953,7 +1951,6 @@ class OrderItemViewSet(viewsets.ModelViewSet):
             # Stock Movement Analytics
             movement_analytics = {}
             try:
-                from decimal import Decimal
                 movements = StockMovement.objects.all()
                 movement_analytics = {
                     'total_movements_today': movements.filter(created_at__date=today).count(),

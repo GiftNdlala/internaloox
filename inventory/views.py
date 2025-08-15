@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 from datetime import timedelta
+from decimal import Decimal
 
 from .models import (
     MaterialCategory, Supplier, Material, StockMovement,
@@ -55,7 +56,6 @@ class MaterialViewSet(viewsets.ModelViewSet):
         return MaterialSerializer
     
     def get_queryset(self):
-        from decimal import Decimal
         queryset = Material.objects.select_related('category', 'primary_supplier')
         
         # Filter by stock status
@@ -63,7 +63,6 @@ class MaterialViewSet(viewsets.ModelViewSet):
         if stock_status == 'low':
             queryset = queryset.filter(current_stock__lte=F('minimum_stock'))
         elif stock_status == 'critical':
-            from decimal import Decimal
             queryset = queryset.filter(current_stock__lte=F('minimum_stock') * Decimal('0.5'))
         elif stock_status == 'optimal':
             queryset = queryset.filter(current_stock__gte=F('ideal_stock'))
@@ -73,7 +72,6 @@ class MaterialViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def low_stock(self, request):
         """Get materials with low stock"""
-        from decimal import Decimal
         materials = self.get_queryset().filter(current_stock__lte=F('minimum_stock'))
         serializer = MaterialListSerializer(materials, many=True)
         return Response(serializer.data)
@@ -81,7 +79,6 @@ class MaterialViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def critical_stock(self, request):
         """Get materials with critical stock"""
-        from decimal import Decimal
         materials = self.get_queryset().filter(current_stock__lte=F('minimum_stock') * Decimal('0.5'))
         serializer = MaterialListSerializer(materials, many=True)
         return Response(serializer.data)
@@ -184,7 +181,6 @@ class MaterialViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def dashboard_stats(self, request):
         """Get dashboard statistics for materials"""
-        from decimal import Decimal
         total_materials = Material.objects.filter(is_active=True).count()
         low_stock_count = Material.objects.filter(
             is_active=True,
@@ -227,7 +223,6 @@ class MaterialViewSet(viewsets.ModelViewSet):
             )
             
             # Calculate total inventory value
-            from decimal import Decimal
             total_value = Material.objects.filter(is_active=True).aggregate(
                 total=Sum(F('current_stock') * F('cost_per_unit'))
             )['total'] or Decimal('0')
@@ -440,34 +435,138 @@ class MaterialViewSet(viewsets.ModelViewSet):
 
 
 class StockMovementViewSet(viewsets.ModelViewSet):
+    """Stock movement management for warehouse operations"""
     queryset = StockMovement.objects.all()
     serializer_class = StockMovementSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['movement_type', 'material', 'created_by']
+    filterset_fields = ['material', 'movement_type', 'created_by']
     search_fields = ['material__name', 'reason', 'notes']
     ordering = ['-created_at']
     
     def get_queryset(self):
+        """Filter movements based on user role"""
+        user = self.request.user
         queryset = StockMovement.objects.select_related('material', 'created_by')
         
-        # Filter by date range
-        start_date = self.request.query_params.get('start_date')
-        end_date = self.request.query_params.get('end_date')
+        # Warehouse staff can see all movements
+        if user.role in ['warehouse', 'warehouse_worker', 'admin', 'owner']:
+            return queryset
         
-        if start_date:
-            queryset = queryset.filter(created_at__date__gte=start_date)
-        if end_date:
-            queryset = queryset.filter(created_at__date__lte=end_date)
+        # Other roles can only see movements they created
+        return queryset.filter(created_by=user)
+    
+    def perform_create(self, serializer):
+        """Create stock movement and update material stock"""
+        movement = serializer.save(created_by=self.request.user)
         
-        return queryset
+        # Update material stock
+        material = movement.material
+        if movement.movement_type == 'in':
+            material.current_stock += movement.quantity
+            # Update cost if provided
+            if movement.unit_cost and movement.unit_cost > 0:
+                material.cost_per_unit = movement.unit_cost
+        elif movement.movement_type == 'out':
+            material.current_stock -= movement.quantity
+            if material.current_stock < 0:
+                material.current_stock = 0  # Prevent negative stock
+        
+        material.save()
+        
+        # Create stock alert if stock is low
+        if material.current_stock <= material.minimum_stock:
+            StockAlert.objects.get_or_create(
+                material=material,
+                status='active',
+                defaults={
+                    'alert_type': 'low_stock',
+                    'message': f'Low stock alert: {material.name} has {material.current_stock} {material.unit} remaining',
+                    'created_by': self.request.user
+                }
+            )
+    
+    def perform_update(self, serializer):
+        """Update stock movement with proper stock recalculation"""
+        old_movement = self.get_object()
+        new_movement = serializer.save()
+        
+        # Recalculate material stock
+        material = new_movement.material
+        
+        # Revert old movement
+        if old_movement.movement_type == 'in':
+            material.current_stock -= old_movement.quantity
+        elif old_movement.movement_type == 'out':
+            material.current_stock += old_movement.quantity
+        
+        # Apply new movement
+        if new_movement.movement_type == 'in':
+            material.current_stock += new_movement.quantity
+        elif new_movement.movement_type == 'out':
+            material.current_stock -= new_movement.quantity
+            if material.current_stock < 0:
+                material.current_stock = 0
+        
+        material.save()
+    
+    def perform_destroy(self, instance):
+        """Delete stock movement and revert stock changes"""
+        material = instance.material
+        
+        # Revert stock changes
+        if instance.movement_type == 'in':
+            material.current_stock -= instance.quantity
+        elif instance.movement_type == 'out':
+            material.current_stock += instance.quantity
+        
+        if material.current_stock < 0:
+            material.current_stock = 0
+        
+        material.save()
+        instance.delete()
     
     @action(detail=False, methods=['get'])
     def recent_movements(self, request):
-        """Get recent stock movements"""
-        movements = self.get_queryset()[:20]
-        serializer = self.get_serializer(movements, many=True)
+        """Get recent stock movements for dashboard"""
+        movements = self.get_queryset().select_related('material', 'created_by')[:20]
+        serializer = StockMovementSerializer(movements, many=True)
         return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'])
+    def movement_summary(self, request):
+        """Get summary of stock movements"""
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        today = timezone.now().date()
+        week_ago = today - timedelta(days=7)
+        month_ago = today - timedelta(days=30)
+        
+        queryset = self.get_queryset()
+        
+        summary = {
+            'total_movements': queryset.count(),
+            'movements_today': queryset.filter(created_at__date=today).count(),
+            'movements_week': queryset.filter(created_at__date__gte=week_ago).count(),
+            'movements_month': queryset.filter(created_at__date__gte=month_ago).count(),
+            'stock_in_today': queryset.filter(
+                movement_type='in',
+                created_at__date=today
+            ).count(),
+            'stock_out_today': queryset.filter(
+                movement_type='out',
+                created_at__date=today
+            ).count(),
+            'total_value_in_today': float(queryset.filter(
+                movement_type='in',
+                created_at__date=today
+            ).aggregate(
+                total=Sum(F('quantity') * F('unit_cost'))
+            )['total'] or 0)
+        }
+        
+        return Response(summary)
 
 
 class ProductMaterialViewSet(viewsets.ModelViewSet):
