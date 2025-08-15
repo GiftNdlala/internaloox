@@ -336,9 +336,7 @@ class ProductSerializer(serializers.ModelSerializer):
 		# Create product
 		product = super().create(validated_data)
 
-		# Persist color/fabric as options (legacy simple storage)
-		from .models import ProductOption
-		
+		# Use new enhanced color/fabric system with JSON fields
 		# Build unique sets from singletons + arrays
 		color_values = {v.strip() for v in ([color_name] if color_name else []) + list(color_list) if isinstance(v, str) and v.strip()}
 		fabric_values = {v.strip() for v in ([fabric_name] if fabric_name else []) + list(fabric_list) if isinstance(v, str) and v.strip()}
@@ -360,16 +358,21 @@ class ProductSerializer(serializers.ModelSerializer):
 			except Exception as e:
 				print(f"Error fetching fabrics by ID: {e}")
 		
-		# Create color and fabric options
-		for cv in color_values:
-			if cv:  # Only create if not empty
-				color_obj, _ = Color.objects.get_or_create(name=cv)
-				ProductOption.objects.get_or_create(product=product, option_type='color', value=cv)
+		# Store colors and fabrics in the new JSON fields
+		if color_values:
+			product.available_colors = [
+				{'name': color_name, 'code': color_name.lower().replace(' ', '_'), 'is_active': True}
+				for color_name in color_values if color_name
+			]
 		
-		for fv in fabric_values:
-			if fv:  # Only create if not empty
-				fabric_obj, _ = Fabric.objects.get_or_create(name=fv)
-				ProductOption.objects.get_or_create(product=product, option_type='fabric', value=fv)
+		if fabric_values:
+			product.available_fabrics = [
+				{'name': fabric_name, 'code': fabric_name.lower().replace(' ', '_'), 'is_active': True}
+				for fabric_name in fabric_values if fabric_name
+			]
+		
+		# Save the updated product with colors/fabrics
+		product.save()
 
 		# Attach currency and echo fields for response
 		self._response_currency = currency
@@ -390,16 +393,16 @@ class ProductSerializer(serializers.ModelSerializer):
 		data['sku'] = getattr(self, '_response_sku', instance.model_code or '')
 		# attributes
 		data['attributes'] = instance.attributes or getattr(self, '_response_attributes', {}) or {}
-		# Try fetch options for colors/fabrics
+		# Try fetch colors/fabrics from new JSON fields or response cache
 		colors_list = getattr(self, '_response_colors', None)
 		fabrics_list = getattr(self, '_response_fabrics', None)
-		try:
-			if colors_list is None:
-				colors_list = list(instance.options.filter(option_type='color').values_list('value', flat=True))
-			if fabrics_list is None:
-				fabrics_list = list(instance.options.filter(option_type='fabric').values_list('value', flat=True))
-		except Exception:
-			pass
+		
+		# If not in response cache, get from new JSON fields
+		if colors_list is None:
+			colors_list = instance.get_active_colors() if hasattr(instance, 'get_active_colors') else []
+		if fabrics_list is None:
+			fabrics_list = instance.get_active_fabrics() if hasattr(instance, 'get_active_fabrics') else []
+		
 		data['colors'] = colors_list or []
 		data['fabrics'] = fabrics_list or []
 		return data
