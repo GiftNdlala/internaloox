@@ -17,7 +17,7 @@ from .serializers import (
     MaterialCategorySerializer, SupplierSerializer, MaterialSerializer, MaterialListSerializer,
     StockMovementSerializer, ProductMaterialSerializer, StockAlertSerializer,
     MaterialConsumptionPredictionSerializer, MaterialStockUpdateSerializer,
-    LowStockReportSerializer, MaterialUsageReportSerializer
+    LowStockReportSerializer, MaterialUsageReportSerializer, ProductSerializer
 )
 
 
@@ -209,79 +209,123 @@ class MaterialViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def warehouse_dashboard(self, request):
         """Complete warehouse dashboard data for frontend"""
-        # Stock overview
-        total_materials = Material.objects.filter(is_active=True).count()
-        low_stock_materials = Material.objects.filter(
-            is_active=True,
-            current_stock__lte=F('minimum_stock')
-        )
-        critical_stock_materials = Material.objects.filter(
-            is_active=True,
-            current_stock__lte=F('minimum_stock') * 0.5
-        )
-        
-        # Calculate total inventory value
-        total_value = Material.objects.filter(is_active=True).aggregate(
-            total=Sum(F('current_stock') * F('cost_per_unit'))
-        )['total'] or 0
-        
-        # Recent stock movements
-        recent_movements = StockMovement.objects.select_related('material', 'created_by').order_by('-created_at')[:10]
-        
-        # Active alerts
-        active_alerts = StockAlert.objects.filter(status='active').select_related('material')[:5]
-        
-        # Materials by category
-        materials_by_category = {}
-        for category in MaterialCategory.objects.filter(is_active=True):
-            materials_by_category[category.get_name_display()] = {
-                'total': Material.objects.filter(category=category, is_active=True).count(),
-                'low_stock': Material.objects.filter(
-                    category=category, 
-                    is_active=True,
-                    current_stock__lte=F('minimum_stock')
-                ).count(),
-                'total_value': Material.objects.filter(
-                    category=category, 
-                    is_active=True
-                ).aggregate(
-                    total=Sum(F('current_stock') * F('cost_per_unit'))
-                )['total'] or 0
-            }
-        
-        # Top suppliers by material count
-        supplier_stats = []
-        for supplier in Supplier.objects.filter(is_active=True):
-            material_count = Material.objects.filter(primary_supplier=supplier, is_active=True).count()
-            if material_count > 0:
-                supplier_stats.append({
-                    'id': supplier.id,
-                    'name': supplier.name,
-                    'material_count': material_count,
-                    'contact_person': supplier.contact_person,
-                    'phone': supplier.phone
-                })
-        
-        return Response({
-            'overview': {
-                'total_materials': total_materials,
-                'low_stock_count': low_stock_materials.count(),
-                'critical_stock_count': critical_stock_materials.count(),
-                'total_inventory_value': float(total_value),
-                'active_alerts_count': active_alerts.count()
-            },
-            'stock_status': {
-                'optimal': total_materials - low_stock_materials.count(),
-                'low': low_stock_materials.count() - critical_stock_materials.count(),
-                'critical': critical_stock_materials.count()
-            },
-            'low_stock_materials': MaterialListSerializer(low_stock_materials[:10], many=True).data,
-            'critical_stock_materials': MaterialListSerializer(critical_stock_materials, many=True).data,
-            'recent_movements': StockMovementSerializer(recent_movements, many=True).data,
-            'active_alerts': StockAlertSerializer(active_alerts, many=True).data,
-            'materials_by_category': materials_by_category,
-            'top_suppliers': sorted(supplier_stats, key=lambda x: x['material_count'], reverse=True)[:5]
-        })
+        try:
+            # Stock overview
+            total_materials = Material.objects.filter(is_active=True).count()
+            low_stock_materials = Material.objects.filter(
+                is_active=True,
+                current_stock__lte=F('minimum_stock')
+            )
+            critical_stock_materials = Material.objects.filter(
+                is_active=True,
+                current_stock__lte=F('minimum_stock') * 0.5
+            )
+            
+            # Calculate total inventory value
+            total_value = Material.objects.filter(is_active=True).aggregate(
+                total=Sum(F('current_stock') * F('cost_per_unit'))
+            )['total'] or 0
+            
+            # Recent stock movements (handle empty queryset)
+            try:
+                recent_movements = StockMovement.objects.select_related('material', 'created_by').order_by('-created_at')[:10]
+                recent_movements_data = StockMovementSerializer(recent_movements, many=True).data
+            except Exception as e:
+                print(f"Error serializing stock movements: {e}")
+                recent_movements_data = []
+            
+            # Active alerts (handle empty queryset)
+            try:
+                active_alerts = StockAlert.objects.filter(status='active').select_related('material')[:5]
+                active_alerts_data = StockAlertSerializer(active_alerts, many=True).data
+            except Exception as e:
+                print(f"Error serializing stock alerts: {e}")
+                active_alerts_data = []
+            
+            # Materials by category
+            materials_by_category = {}
+            for category in MaterialCategory.objects.filter(is_active=True):
+                try:
+                    materials_by_category[category.get_name_display()] = {
+                        'total': Material.objects.filter(category=category, is_active=True).count(),
+                        'low_stock': Material.objects.filter(
+                            category=category, 
+                            is_active=True,
+                            current_stock__lte=F('minimum_stock')
+                        ).count(),
+                        'total_value': Material.objects.filter(
+                            category=category, 
+                            is_active=True
+                        ).aggregate(
+                            total=Sum(F('current_stock') * F('cost_per_unit'))
+                        )['total'] or 0
+                    }
+                except Exception as e:
+                    print(f"Error processing category {category.name}: {e}")
+                    materials_by_category[category.get_name_display()] = {
+                        'total': 0,
+                        'low_stock': 0,
+                        'total_value': 0
+                    }
+            
+            # Top suppliers by material count
+            supplier_stats = []
+            for supplier in Supplier.objects.filter(is_active=True):
+                try:
+                    material_count = Material.objects.filter(primary_supplier=supplier, is_active=True).count()
+                    if material_count > 0:
+                        supplier_stats.append({
+                            'id': supplier.id,
+                            'name': supplier.name,
+                            'material_count': material_count,
+                            'contact_person': supplier.contact_person,
+                            'phone': supplier.phone
+                        })
+                except Exception as e:
+                    print(f"Error processing supplier {supplier.name}: {e}")
+                    continue
+            
+            # Serialize materials with error handling
+            try:
+                low_stock_data = MaterialListSerializer(low_stock_materials[:10], many=True).data
+            except Exception as e:
+                print(f"Error serializing low stock materials: {e}")
+                low_stock_data = []
+            
+            try:
+                critical_stock_data = MaterialListSerializer(critical_stock_materials, many=True).data
+            except Exception as e:
+                print(f"Error serializing critical stock materials: {e}")
+                critical_stock_data = []
+            
+            return Response({
+                'overview': {
+                    'total_materials': total_materials,
+                    'low_stock_count': low_stock_materials.count(),
+                    'critical_stock_count': critical_stock_materials.count(),
+                    'total_inventory_value': float(total_value),
+                    'active_alerts_count': len(active_alerts_data)
+                },
+                'stock_status': {
+                    'optimal': total_materials - low_stock_materials.count(),
+                    'low': low_stock_materials.count() - critical_stock_materials.count(),
+                    'critical': critical_stock_materials.count()
+                },
+                'low_stock_materials': low_stock_data,
+                'critical_stock_materials': critical_stock_data,
+                'recent_movements': recent_movements_data,
+                'active_alerts': active_alerts_data,
+                'materials_by_category': materials_by_category,
+                'top_suppliers': sorted(supplier_stats, key=lambda x: x['material_count'], reverse=True)[:5]
+            })
+        except Exception as e:
+            print(f"Error in warehouse_dashboard: {e}")
+            import traceback
+            traceback.print_exc()
+            return Response({
+                'error': 'Failed to load warehouse dashboard data',
+                'details': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['get'])
     def stock_locations(self, request):
@@ -612,6 +656,7 @@ class MaterialConsumptionPredictionViewSet(viewsets.ReadOnlyModelViewSet):
 class ProductViewSet(viewsets.ModelViewSet):
     """Product management for warehouse managers"""
     queryset = Product.objects.all()
+    serializer_class = ProductSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['category', 'product_type', 'is_active', 'available_for_order']

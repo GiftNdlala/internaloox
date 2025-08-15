@@ -3,6 +3,7 @@ from .models import (
     MaterialCategory, Supplier, Material, StockMovement,
     ProductMaterial, StockAlert, MaterialConsumptionPrediction
 )
+from orders.models import Product
 
 
 class MaterialCategorySerializer(serializers.ModelSerializer):
@@ -196,6 +197,38 @@ class MaterialConsumptionPredictionSerializer(serializers.ModelSerializer):
         model = MaterialConsumptionPrediction
         fields = '__all__'
         read_only_fields = ['calculated_at']
+
+
+class ProductSerializer(serializers.ModelSerializer):
+    """Product serializer for warehouse management"""
+    category_name = serializers.CharField(source='category.name', read_only=True)
+    available_colors = serializers.JSONField(read_only=True)
+    available_fabrics = serializers.JSONField(read_only=True)
+    stock_status = serializers.CharField(read_only=True)
+    total_value = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    
+    # Frontend compatibility fields
+    unit_price = serializers.DecimalField(source='cost_per_unit', max_digits=10, decimal_places=2, read_only=True)
+    product_name = serializers.CharField(source='name', read_only=True)
+    
+    class Meta:
+        model = Product
+        fields = [
+            'id', 'name', 'product_name', 'model_code', 'description', 'category',
+            'category_name', 'product_type', 'unit_price', 'cost_per_unit',
+            'available_colors', 'available_fabrics', 'stock_status', 'total_value',
+            'is_active', 'available_for_order', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['created_at', 'updated_at', 'available_colors', 'available_fabrics']
+    
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Ensure colors and fabrics are always arrays
+        if not data.get('available_colors'):
+            data['available_colors'] = []
+        if not data.get('available_fabrics'):
+            data['available_fabrics'] = []
+        return data
 
 
 class MaterialStockUpdateSerializer(serializers.Serializer):
