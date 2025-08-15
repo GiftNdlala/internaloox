@@ -125,6 +125,18 @@ class StockMovementSerializer(serializers.ModelSerializer):
         fields = ['id', 'material', 'movement_type', 'quantity', 'unit_cost', 'reference_type', 'reference_id', 'reason', 'notes', 'created_by', 'created_at', 'material_name', 'created_by_username', 'note']
         read_only_fields = ['created_by', 'created_at']
 
+    def get_material_name(self, obj):
+        try:
+            return obj.material.name if obj.material else 'Unknown Material'
+        except Exception:
+            return 'Unknown Material'
+    
+    def get_created_by_username(self, obj):
+        try:
+            return obj.created_by.username if obj.created_by else 'Unknown User'
+        except Exception:
+            return 'Unknown User'
+
     def validate(self, attrs):
         initial = getattr(self, 'initial_data', {})
         
@@ -151,19 +163,24 @@ class StockMovementSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        # Expose direction instead of movement_type
-        data['direction'] = data.get('movement_type')
-        # Prefer note alias (from notes or reason)
-        note_val = data.get('notes') or data.get('reason')
-        if note_val is not None:
-            data['note'] = note_val
-        # For stock-out, present unit_cost as null if zero
-        if data.get('direction') == 'out':
-            try:
-                if float(data.get('unit_cost') or 0) == 0:
+        
+        # Safely handle note field
+        try:
+            note_val = data.get('notes') or data.get('reason')
+            if note_val is not None:
+                data['note'] = note_val
+        except Exception:
+            pass
+        
+        # Safely handle unit_cost for stock-out
+        try:
+            if data.get('movement_type') == 'out':
+                unit_cost = data.get('unit_cost')
+                if unit_cost is not None and float(unit_cost) == 0:
                     data['unit_cost'] = None
-            except Exception:
-                pass
+        except (ValueError, TypeError):
+            pass
+        
         return data
 
 
