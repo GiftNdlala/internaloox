@@ -123,7 +123,7 @@ class StockMovementSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StockMovement
-        fields = ['id', 'material', 'quantity', 'unit_cost', 'reference_type', 'reference_id', 'reason', 'notes', 'created_by', 'created_at', 'material_name', 'created_by_username', 'direction', 'note']
+        fields = ['id', 'material', 'movement_type', 'quantity', 'unit_cost', 'reference_type', 'reference_id', 'reason', 'notes', 'created_by', 'created_at', 'material_name', 'created_by_username', 'direction', 'note']
         read_only_fields = ['created_by', 'created_at']
 
     def validate(self, attrs):
