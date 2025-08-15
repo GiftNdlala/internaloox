@@ -115,8 +115,8 @@ class MaterialListSerializer(serializers.ModelSerializer):
 
 
 class StockMovementSerializer(serializers.ModelSerializer):
-    material_name = serializers.CharField(source='material.name', read_only=True)
-    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
+    material_name = serializers.SerializerMethodField()
+    created_by_username = serializers.SerializerMethodField()
     # Frontend alias fields
     note = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
@@ -126,14 +126,20 @@ class StockMovementSerializer(serializers.ModelSerializer):
         read_only_fields = ['created_by', 'created_at']
 
     def get_material_name(self, obj):
+        """Safely get the name of the material"""
         try:
-            return obj.material.name if obj.material else 'Unknown Material'
+            if obj.material:
+                return obj.material.name
+            return 'Unknown Material'
         except Exception:
             return 'Unknown Material'
     
     def get_created_by_username(self, obj):
+        """Safely get the username of the user who created the stock movement"""
         try:
-            return obj.created_by.username if obj.created_by else 'Unknown User'
+            if obj.created_by:
+                return obj.created_by.username
+            return 'Unknown User'
         except Exception:
             return 'Unknown User'
 
@@ -157,8 +163,7 @@ class StockMovementSerializer(serializers.ModelSerializer):
         return super().validate(attrs)
 
     def create(self, validated_data):
-        # Set the created_by field to the current user
-        validated_data['created_by'] = self.context['request'].user
+        # created_by is set in the view's perform_create method
         return super().create(validated_data)
 
     def to_representation(self, instance):

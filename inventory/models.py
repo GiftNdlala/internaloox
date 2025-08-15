@@ -158,7 +158,8 @@ class StockMovement(models.Model):
         ordering = ['-created_at']
     
     def __str__(self):
-        return f"{self.get_movement_type_display()}: {self.material.name} - {self.quantity}"
+        material_name = self.material.name if self.material else 'Unknown Material'
+        return f"{self.get_movement_type_display()}: {material_name} - {self.quantity}"
     
     def save(self, *args, **kwargs):
         """Update material stock when movement is saved"""
