@@ -1838,3 +1838,163 @@ class OrderItemViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['order', 'product', 'color', 'fabric']
     ordering = ['-id']
+
+    @action(detail=False, methods=['get'])
+    def warehouse_analytics(self, request):
+        """Comprehensive warehouse analytics for warehouse dashboard"""
+        user = request.user
+        
+        if user.role not in ['warehouse_worker', 'warehouse', 'admin', 'owner']:
+            return Response({'error': 'Access denied: Warehouse access required'}, status=status.HTTP_403_FORBIDDEN)
+        
+        try:
+            from django.db.models import Count, Sum, Q
+            from django.utils import timezone
+            from datetime import timedelta
+            from inventory.models import Material, StockMovement
+            from tasks.models import Task
+            
+            # Get date range for analytics
+            today = timezone.now().date()
+            week_ago = today - timedelta(days=7)
+            month_ago = today - timedelta(days=30)
+            
+            # Stock Analytics
+            stock_analytics = {}
+            try:
+                from decimal import Decimal
+                materials = Material.objects.filter(is_active=True)
+                stock_analytics = {
+                    'total_materials': materials.count(),
+                    'in_stock': materials.filter(current_stock__gt=0).count(),
+                    'low_stock_count': materials.filter(current_stock__lte=F('minimum_stock')).count(),
+                    'critical_stock_count': materials.filter(current_stock__lte=F('minimum_stock') * Decimal('0.5')).count(),
+                    'total_inventory_value': float(materials.aggregate(
+                        total=Sum(F('current_stock') * F('cost_per_unit'))
+                    )['total'] or 0)
+                }
+            except Exception as e:
+                print(f"Error calculating stock analytics: {e}")
+                stock_analytics = {
+                    'total_materials': 0,
+                    'in_stock': 0,
+                    'low_stock_count': 0,
+                    'critical_stock_count': 0,
+                    'total_inventory_value': 0
+                }
+            
+            # Order Analytics
+            order_analytics = {}
+            try:
+                warehouse_orders = self.get_queryset()
+                
+                # Orders by production stage
+                order_analytics = {
+                    'total_orders': warehouse_orders.count(),
+                    'not_started': warehouse_orders.filter(production_status='not_started').count(),
+                    'cutting': warehouse_orders.filter(production_status='cutting').count(),
+                    'sewing': warehouse_orders.filter(production_status='sewing').count(),
+                    'finishing': warehouse_orders.filter(production_status='finishing').count(),
+                    'quality_check': warehouse_orders.filter(production_status='quality_check').count(),
+                    'completed': warehouse_orders.filter(production_status='completed').count(),
+                    'in_production': warehouse_orders.filter(production_status='in_production').count(),
+                    'ready_for_delivery': warehouse_orders.filter(order_status='order_ready').count(),
+                    'orders': OrderListSerializer(warehouse_orders[:10], many=True).data
+                }
+            except Exception as e:
+                print(f"Error calculating order analytics: {e}")
+                order_analytics = {
+                    'total_orders': 0,
+                    'not_started': 0,
+                    'cutting': 0,
+                    'sewing': 0,
+                    'finishing': 0,
+                    'quality_check': 0,
+                    'completed': 0,
+                    'in_production': 0,
+                    'ready_for_delivery': 0,
+                    'orders': []
+                }
+            
+            # Task Analytics
+            task_analytics = {}
+            try:
+                tasks = Task.objects.all()
+                task_analytics = {
+                    'total_tasks': tasks.count(),
+                    'assigned': tasks.filter(status='assigned').count(),
+                    'tasks_in_progress': tasks.filter(status='in_progress').count(),
+                    'tasks_completed_week': tasks.filter(
+                        status='completed',
+                        completed_at__date__gte=week_ago
+                    ).count(),
+                    'tasks_completed_month': tasks.filter(
+                        status='completed',
+                        completed_at__date__gte=month_ago
+                    ).count(),
+                    'tasks_paused': tasks.filter(status='paused').count(),
+                    'tasks_overdue': tasks.filter(
+                        Q(status__in=['assigned', 'in_progress']) & 
+                        Q(due_date__lt=today)
+                    ).count()
+                }
+            except Exception as e:
+                print(f"Error calculating task analytics: {e}")
+                task_analytics = {
+                    'total_tasks': 0,
+                    'assigned': 0,
+                    'tasks_in_progress': 0,
+                    'tasks_completed_week': 0,
+                    'tasks_completed_month': 0,
+                    'tasks_paused': 0,
+                    'tasks_overdue': 0
+                }
+            
+            # Stock Movement Analytics
+            movement_analytics = {}
+            try:
+                from decimal import Decimal
+                movements = StockMovement.objects.all()
+                movement_analytics = {
+                    'total_movements_today': movements.filter(created_at__date=today).count(),
+                    'total_movements_week': movements.filter(created_at__date__gte=week_ago).count(),
+                    'stock_in_today': movements.filter(
+                        movement_type='in',
+                        created_at__date=today
+                    ).count(),
+                    'stock_out_today': movements.filter(
+                        movement_type='out',
+                        created_at__date=today
+                    ).count(),
+                    'total_value_in_today': float(movements.filter(
+                        movement_type='in',
+                        created_at__date=today
+                    ).aggregate(total=Sum(F('quantity') * F('unit_cost')))['total'] or 0)
+                }
+            except Exception as e:
+                print(f"Error calculating movement analytics: {e}")
+                movement_analytics = {
+                    'total_movements_today': 0,
+                    'total_movements_week': 0,
+                    'stock_in_today': 0,
+                    'stock_out_today': 0,
+                    'total_value_in_today': 0
+                }
+            
+            return Response({
+                'dashboard_type': 'warehouse_analytics',
+                'stock_analytics': stock_analytics,
+                'order_analytics': order_analytics,
+                'task_analytics': task_analytics,
+                'movement_analytics': movement_analytics,
+                'generated_at': timezone.now().isoformat()
+            })
+            
+        except Exception as e:
+            print(f"Error in warehouse_analytics: {e}")
+            import traceback
+            traceback.print_exc()
+            return Response({
+                'error': 'Failed to load warehouse analytics',
+                'details': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
