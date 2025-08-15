@@ -118,32 +118,22 @@ class StockMovementSerializer(serializers.ModelSerializer):
     material_name = serializers.CharField(source='material.name', read_only=True)
     created_by_username = serializers.CharField(source='created_by.username', read_only=True)
     # Frontend alias fields
-    direction = serializers.CharField(write_only=True, required=False)
     note = serializers.CharField(write_only=True, required=False, allow_blank=True)
-    # Make movement_type not required since it's set through direction mapping
-    movement_type = serializers.CharField(required=False)
 
     class Meta:
         model = StockMovement
-        fields = ['id', 'material', 'movement_type', 'quantity', 'unit_cost', 'reference_type', 'reference_id', 'reason', 'notes', 'created_by', 'created_at', 'material_name', 'created_by_username', 'direction', 'note']
+        fields = ['id', 'material', 'movement_type', 'quantity', 'unit_cost', 'reference_type', 'reference_id', 'reason', 'notes', 'created_by', 'created_at', 'material_name', 'created_by_username', 'note']
         read_only_fields = ['created_by', 'created_at']
 
     def validate(self, attrs):
         initial = getattr(self, 'initial_data', {})
-        # Map direction -> movement_type
-        direction = initial.get('direction')
-        if direction:
-            direction = direction.lower().strip()
-            if direction not in ['in', 'out']:
-                raise serializers.ValidationError({'direction': 'Must be "in" or "out"'})
-            attrs['movement_type'] = direction
         
         # Ensure reason is provided
         if not attrs.get('reason') and not initial.get('reason'):
             raise serializers.ValidationError({'reason': 'This field is required.'})
         
         # unit_cost required only for 'in'
-        movement_type = attrs.get('movement_type') or direction
+        movement_type = attrs.get('movement_type')
         if movement_type == 'in':
             if initial.get('unit_cost') in [None, '', '0'] and not attrs.get('unit_cost'):
                 raise serializers.ValidationError({'unit_cost': 'unit_cost is required for stock-in'})
