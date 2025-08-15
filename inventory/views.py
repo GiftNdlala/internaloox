@@ -63,7 +63,7 @@ class MaterialViewSet(viewsets.ModelViewSet):
         if stock_status == 'low':
             queryset = queryset.filter(current_stock__lte=F('minimum_stock'))
         elif stock_status == 'critical':
-            queryset = queryset.filter(current_stock__lte=F('minimum_stock') * Decimal('0.5'))
+            queryset = queryset.filter(current_stock__lte=F('minimum_stock') * 0.5)
         elif stock_status == 'optimal':
             queryset = queryset.filter(current_stock__gte=F('ideal_stock'))
         
@@ -80,8 +80,7 @@ class MaterialViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def critical_stock(self, request):
         """Get materials with critical stock"""
-        from decimal import Decimal
-        materials = self.get_queryset().filter(current_stock__lte=F('minimum_stock') * Decimal('0.5'))
+        materials = self.get_queryset().filter(current_stock__lte=F('minimum_stock') * 0.5)
         serializer = MaterialListSerializer(materials, many=True)
         return Response(serializer.data)
     

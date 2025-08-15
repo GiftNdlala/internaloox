@@ -1868,7 +1868,7 @@ class OrderItemViewSet(viewsets.ModelViewSet):
                     'total_materials': materials.count(),
                     'in_stock': materials.filter(current_stock__gt=0).count(),
                     'low_stock_count': materials.filter(current_stock__lte=F('minimum_stock')).count(),
-                    'critical_stock_count': materials.filter(current_stock__lte=F('minimum_stock') * Decimal('0.5')).count(),
+                    'critical_stock_count': materials.filter(current_stock__lte=F('minimum_stock') * 0.5).count(),
                     'total_inventory_value': float(materials.aggregate(
                         total=Sum(F('current_stock') * F('cost_per_unit'))
                     )['total'] or 0)
