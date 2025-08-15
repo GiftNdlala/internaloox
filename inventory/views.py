@@ -63,7 +63,8 @@ class MaterialViewSet(viewsets.ModelViewSet):
         if stock_status == 'low':
             queryset = queryset.filter(current_stock__lte=F('minimum_stock'))
         elif stock_status == 'critical':
-            queryset = queryset.filter(current_stock__lte=F('minimum_stock') * 0.5)
+            from decimal import Decimal
+            queryset = queryset.filter(current_stock__lte=F('minimum_stock') * Decimal('0.5'))
         elif stock_status == 'optimal':
             queryset = queryset.filter(current_stock__gte=F('ideal_stock'))
         
@@ -80,7 +81,8 @@ class MaterialViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def critical_stock(self, request):
         """Get materials with critical stock"""
-        materials = self.get_queryset().filter(current_stock__lte=F('minimum_stock') * 0.5)
+        from decimal import Decimal
+        materials = self.get_queryset().filter(current_stock__lte=F('minimum_stock') * Decimal('0.5'))
         serializer = MaterialListSerializer(materials, many=True)
         return Response(serializer.data)
     
@@ -182,6 +184,7 @@ class MaterialViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def dashboard_stats(self, request):
         """Get dashboard statistics for materials"""
+        from decimal import Decimal
         total_materials = Material.objects.filter(is_active=True).count()
         low_stock_count = Material.objects.filter(
             is_active=True,
@@ -189,7 +192,7 @@ class MaterialViewSet(viewsets.ModelViewSet):
         ).count()
         critical_stock_count = Material.objects.filter(
             is_active=True,
-            current_stock__lte=F('minimum_stock') * 0.5
+            current_stock__lte=F('minimum_stock') * Decimal('0.5')
         ).count()
         
         total_value = Material.objects.filter(is_active=True).aggregate(
@@ -220,7 +223,7 @@ class MaterialViewSet(viewsets.ModelViewSet):
             )
             critical_stock_materials = Material.objects.filter(
                 is_active=True,
-                current_stock__lte=F('minimum_stock') * 0.5
+                current_stock__lte=F('minimum_stock') * Decimal('0.5')
             )
             
             # Calculate total inventory value

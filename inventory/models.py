@@ -106,7 +106,8 @@ class Material(models.Model):
     @property
     def is_critical_stock(self):
         """Check if current stock is critically low (50% of minimum)"""
-        return self.current_stock <= (self.minimum_stock * 0.5)
+        from decimal import Decimal
+        return self.current_stock <= (self.minimum_stock * Decimal('0.5'))
     
     @property
     def stock_status(self):
