@@ -1356,6 +1356,37 @@ class OrderViewSet(viewsets.ModelViewSet):
             }
         })
 
+    @action(detail=False, methods=['get'], url_path='management_data')
+    def management_data(self, request):
+        """Provide comprehensive data for order management interface."""
+        try:
+            # Get status options
+            order_statuses = [{'value': choice[0], 'label': choice[1]} for choice in Order.ORDER_STATUS_CHOICES]
+            production_statuses = [{'value': choice[0], 'label': choice[1]} for choice in Order.PRODUCTION_STATUS_CHOICES]
+            
+            # Get basic counts for dashboard
+            total_orders = Order.objects.count()
+            pending_orders = Order.objects.filter(order_status='pending').count()
+            in_production = Order.objects.filter(production_status='in_production').count()
+            ready_for_delivery = Order.objects.filter(production_status='completed').count()
+            
+            return Response({
+                'status_options': {
+                    'order_statuses': order_statuses,
+                    'production_statuses': production_statuses
+                },
+                'dashboard_stats': {
+                    'total_orders': total_orders,
+                    'pending_orders': pending_orders,
+                    'in_production': in_production,
+                    'ready_for_delivery': ready_for_delivery
+                }
+            })
+        except Exception as e:
+            return Response({
+                'error': f'Failed to fetch management data: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
     @action(detail=True, methods=['patch'])
     def update_payment(self, request, pk=None):
         """Update payment information for an order"""

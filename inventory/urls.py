@@ -19,4 +19,7 @@ urlpatterns = [
     path('material-categories/', views.MaterialCategoryViewSet.as_view({'get': 'list'}), name='material_categories'),
     # Product management endpoints
     path('products/create_with_options/', views.create_product_with_options, name='create_product_with_options'),
+    # Material dashboard endpoints
+    path('materials/warehouse_dashboard/', views.MaterialViewSet.as_view({'get': 'warehouse_dashboard'}), name='warehouse_dashboard'),
+    path('materials/low_stock/', views.MaterialViewSet.as_view({'get': 'low_stock'}), name='low_stock'),
 ]
