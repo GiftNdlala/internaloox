@@ -55,6 +55,7 @@ class MaterialViewSet(viewsets.ModelViewSet):
         return MaterialSerializer
     
     def get_queryset(self):
+        from decimal import Decimal
         queryset = Material.objects.select_related('category', 'primary_supplier')
         
         # Filter by stock status
@@ -62,7 +63,7 @@ class MaterialViewSet(viewsets.ModelViewSet):
         if stock_status == 'low':
             queryset = queryset.filter(current_stock__lte=F('minimum_stock'))
         elif stock_status == 'critical':
-            queryset = queryset.filter(current_stock__lte=F('minimum_stock') * 0.5)
+            queryset = queryset.filter(current_stock__lte=F('minimum_stock') * Decimal('0.5'))
         elif stock_status == 'optimal':
             queryset = queryset.filter(current_stock__gte=F('ideal_stock'))
         
@@ -71,6 +72,7 @@ class MaterialViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def low_stock(self, request):
         """Get materials with low stock"""
+        from decimal import Decimal
         materials = self.get_queryset().filter(current_stock__lte=F('minimum_stock'))
         serializer = MaterialListSerializer(materials, many=True)
         return Response(serializer.data)
@@ -78,7 +80,8 @@ class MaterialViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def critical_stock(self, request):
         """Get materials with critical stock"""
-        materials = self.get_queryset().filter(current_stock__lte=F('minimum_stock') * 0.5)
+        from decimal import Decimal
+        materials = self.get_queryset().filter(current_stock__lte=F('minimum_stock') * Decimal('0.5'))
         serializer = MaterialListSerializer(materials, many=True)
         return Response(serializer.data)
     
@@ -222,9 +225,10 @@ class MaterialViewSet(viewsets.ModelViewSet):
             )
             
             # Calculate total inventory value
+            from decimal import Decimal
             total_value = Material.objects.filter(is_active=True).aggregate(
                 total=Sum(F('current_stock') * F('cost_per_unit'))
-            )['total'] or 0
+            )['total'] or Decimal('0')
             
             # Recent stock movements (handle empty queryset)
             try:
@@ -258,7 +262,7 @@ class MaterialViewSet(viewsets.ModelViewSet):
                             is_active=True
                         ).aggregate(
                             total=Sum(F('current_stock') * F('cost_per_unit'))
-                        )['total'] or 0
+                        )['total'] or Decimal('0')
                     }
                 except Exception as e:
                     print(f"Error processing category {category.name}: {e}")
