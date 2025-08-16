@@ -234,8 +234,8 @@ class ProductSerializer(serializers.ModelSerializer):
     # Map model fields to frontend-expected fields
     sku = serializers.CharField(source='model_code', read_only=True)
     price = serializers.DecimalField(source='unit_price', max_digits=10, decimal_places=2, read_only=True)
-    available_colors = serializers.JSONField(read_only=False)
-    available_fabrics = serializers.JSONField(read_only=False)
+    available_colors = serializers.JSONField(read_only=False, required=False)
+    available_fabrics = serializers.JSONField(read_only=False, required=False)
     
     # Frontend compatibility fields
     unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
@@ -249,7 +249,18 @@ class ProductSerializer(serializers.ModelSerializer):
             'available_colors', 'available_fabrics', 'stock', 'base_price',
             'is_active', 'available_for_order', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['created_at', 'updated_at', 'available_colors', 'available_fabrics']
+        read_only_fields = ['created_at', 'updated_at']
+    
+    def validate(self, attrs):
+        """Custom validation for partial updates"""
+        # For partial updates, only validate fields that are being updated
+        if self.partial:
+            # If updating only colors/fabrics, don't require other fields
+            if set(attrs.keys()) <= {'available_colors', 'available_fabrics'}:
+                return attrs
+        
+        # For full updates, ensure required fields are present
+        return super().validate(attrs)
     
     def to_representation(self, instance):
         try:
