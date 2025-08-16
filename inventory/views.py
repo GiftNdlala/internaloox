@@ -458,7 +458,14 @@ class StockMovementViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         """Create stock movement and update material stock"""
-        movement = serializer.save(created_by=self.request.user)
+        try:
+            print(f"perform_create: user={self.request.user.username}, user_id={self.request.user.id}")
+            print(f"perform_create: data={serializer.validated_data}")
+            movement = serializer.save(created_by=self.request.user)
+            print(f"perform_create: movement created with ID={movement.id}")
+        except Exception as e:
+            print(f"Error in perform_create: {e}")
+            raise
         
         # Update material stock
         material = movement.material
@@ -768,16 +775,46 @@ class ProductViewSet(viewsets.ModelViewSet):
     search_fields = ['product_name', 'name', 'model_code', 'description']
     ordering = ['-created_at']
     
+    def list(self, request, *args, **kwargs):
+        """Override list method to handle serialization errors gracefully"""
+        try:
+            print(f"ProductViewSet.list called by user: {request.user.username} with role: {getattr(request.user, 'role', 'unknown')}")
+            print(f"Request query params: {request.query_params}")
+            
+            # Get the queryset
+            queryset = self.get_queryset()
+            print(f"Queryset count: {queryset.count()}")
+            
+            # Try to serialize
+            serializer = self.get_serializer(queryset, many=True)
+            data = serializer.data
+            print(f"Serialization successful, data length: {len(data) if isinstance(data, list) else 'not a list'}")
+            
+            return Response(data)
+        except Exception as e:
+            print(f"Error in ProductViewSet.list: {e}")
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {'error': 'Failed to retrieve products. Please try again.'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
     def get_queryset(self):
         """Filter products based on user role"""
-        user = self.request.user
-        
-        # Warehouse managers can see all products
-        if user.role in ['owner', 'admin', 'warehouse']:
-            return Product.objects.all()
-        
-        # Workers see only active products
-        return Product.objects.filter(is_active=True, available_for_order=True)
+        try:
+            user = self.request.user
+            
+            # Warehouse managers can see all products
+            if user.role in ['owner', 'admin', 'warehouse']:
+                return Product.objects.all()
+            
+            # Workers see only active products
+            return Product.objects.filter(is_active=True, available_for_order=True)
+        except Exception as e:
+            print(f"Error in ProductViewSet.get_queryset: {e}")
+            # Fallback to empty queryset if there's an error
+            return Product.objects.none()
     
     @action(detail=True, methods=['post'])
     def add_color(self, request, pk=None):
@@ -862,6 +899,45 @@ class ProductViewSet(viewsets.ModelViewSet):
                 })
         
         return Response({'error': 'Fabric not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=False, methods=['get'])
+    def debug(self, request):
+        """Debug endpoint to check product data"""
+        try:
+            products = Product.objects.all()[:5]  # Get first 5 products
+            debug_data = []
+            
+            for product in products:
+                try:
+                    # Try to serialize each product individually
+                    serializer = ProductSerializer(product)
+                    serialized_data = serializer.data
+                    debug_data.append({
+                        'id': product.id,
+                        'name': product.name,
+                        'product_name': product.product_name,
+                        'available_colors': product.available_colors,
+                        'available_fabrics': product.available_fabrics,
+                        'serialization_success': True,
+                        'serialized_data': serialized_data
+                    })
+                except Exception as e:
+                    debug_data.append({
+                        'id': product.id,
+                        'name': product.name,
+                        'product_name': product.product_name,
+                        'available_colors': product.available_colors,
+                        'available_fabrics': product.available_fabrics,
+                        'serialization_success': False,
+                        'error': str(e)
+                    })
+            
+            return Response({
+                'total_products': Product.objects.count(),
+                'debug_data': debug_data
+            })
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['get'])
     def colors_and_fabrics(self, request):

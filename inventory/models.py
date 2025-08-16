@@ -166,21 +166,25 @@ class StockMovement(models.Model):
         is_new = self.pk is None
         super().save(*args, **kwargs)
         
-        if is_new:
-            # Update material stock
-            material = self.material
-            if self.movement_type == 'in':
-                material.current_stock += self.quantity
-                material.last_restock_date = timezone.now()
-            elif self.movement_type in ['out', 'waste']:
-                material.current_stock -= self.quantity
-            elif self.movement_type == 'adjustment':
-                # For adjustments, quantity can be positive or negative
-                material.current_stock += self.quantity
-            elif self.movement_type == 'return':
-                material.current_stock += self.quantity
-            
-            material.save()
+        if is_new and self.material:
+            try:
+                # Update material stock
+                material = self.material
+                if self.movement_type == 'in':
+                    material.current_stock += self.quantity
+                    material.last_restock_date = timezone.now()
+                elif self.movement_type in ['out', 'waste']:
+                    material.current_stock -= self.quantity
+                elif self.movement_type == 'adjustment':
+                    # For adjustments, quantity can be positive or negative
+                    material.current_stock += self.quantity
+                elif self.movement_type == 'return':
+                    material.current_stock += self.quantity
+                
+                material.save()
+            except Exception as e:
+                print(f"Error updating material stock: {e}")
+                # Don't fail the save operation if stock update fails
 
 
 class ProductMaterial(models.Model):

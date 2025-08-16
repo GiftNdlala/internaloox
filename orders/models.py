@@ -122,15 +122,25 @@ class Product(models.Model):
     
     def get_active_colors(self):
         """Get list of active color names"""
-        if not self.available_colors:
+        try:
+            if not self.available_colors:
+                return []
+            if not isinstance(self.available_colors, list):
+                return []
+            return [color.get('name', '') for color in self.available_colors if isinstance(color, dict) and color.get('is_active', True)]
+        except Exception:
             return []
-        return [color['name'] for color in self.available_colors if color.get('is_active', True)]
     
     def get_active_fabrics(self):
         """Get list of active fabric names"""
-        if not self.available_fabrics:
+        try:
+            if not self.available_fabrics:
+                return []
+            if not isinstance(self.available_fabrics, list):
+                return []
+            return [fabric.get('name', '') for fabric in self.available_fabrics if isinstance(fabric, dict) and fabric.get('is_active', True)]
+        except Exception:
             return []
-        return [fabric['name'] for fabric in self.available_fabrics if fabric.get('is_active', True)]
 
 class ProductOption(models.Model):
     OPTION_TYPE_CHOICES = [

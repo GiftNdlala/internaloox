@@ -146,25 +146,34 @@ class StockMovementSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         initial = getattr(self, 'initial_data', {})
         
-        # Ensure reason is provided
-        if not attrs.get('reason') and not initial.get('reason'):
-            raise serializers.ValidationError({'reason': 'This field is required.'})
-        
-        # unit_cost required only for 'in'
-        movement_type = attrs.get('movement_type')
-        if movement_type == 'in':
-            if initial.get('unit_cost') in [None, '', '0'] and not attrs.get('unit_cost'):
-                raise serializers.ValidationError({'unit_cost': 'unit_cost is required for stock-in'})
-        
-        # Map note -> notes
-        if 'note' in initial and initial.get('note') is not None:
-            attrs['notes'] = initial.get('note')
-        
-        return super().validate(attrs)
+        try:
+            # Ensure reason is provided
+            if not attrs.get('reason') and not initial.get('reason'):
+                raise serializers.ValidationError({'reason': 'This field is required.'})
+            
+            # unit_cost required only for 'in'
+            movement_type = attrs.get('movement_type')
+            if movement_type == 'in':
+                if initial.get('unit_cost') in [None, '', '0'] and not attrs.get('unit_cost'):
+                    raise serializers.ValidationError({'unit_cost': 'unit_cost is required for stock-in'})
+            
+            # Map note -> notes
+            if 'note' in initial and initial.get('note') is not None:
+                attrs['notes'] = initial.get('note')
+            
+            return super().validate(attrs)
+        except Exception as e:
+            print(f"Validation error in StockMovementSerializer: {e}")
+            raise
 
     def create(self, validated_data):
-        # created_by is set in the view's perform_create method
-        return super().create(validated_data)
+        try:
+            print(f"Creating StockMovement with data: {validated_data}")
+            # created_by is set in the view's perform_create method
+            return super().create(validated_data)
+        except Exception as e:
+            print(f"Error creating StockMovement: {e}")
+            raise
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -222,7 +231,9 @@ class MaterialConsumptionPredictionSerializer(serializers.ModelSerializer):
 
 class ProductSerializer(serializers.ModelSerializer):
     """Product serializer for warehouse management"""
-    category_name = serializers.CharField(source='category', read_only=True)
+    # Map model fields to frontend-expected fields
+    sku = serializers.CharField(source='model_code', read_only=True)
+    price = serializers.DecimalField(source='unit_price', max_digits=10, decimal_places=2, read_only=True)
     available_colors = serializers.JSONField(read_only=True)
     available_fabrics = serializers.JSONField(read_only=True)
     
@@ -233,26 +244,62 @@ class ProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            'id', 'name', 'product_name', 'model_code', 'description', 'category',
-            'category_name', 'product_type', 'unit_price', 'unit_cost',
+            'id', 'name', 'product_name', 'sku', 'model_code', 'description', 'category',
+            'product_type', 'price', 'unit_price', 'unit_cost',
             'available_colors', 'available_fabrics', 'stock', 'base_price',
             'is_active', 'available_for_order', 'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at', 'available_colors', 'available_fabrics']
     
     def to_representation(self, instance):
-        data = super().to_representation(instance)
-        # Ensure colors and fabrics are always arrays
-        if not data.get('available_colors'):
-            data['available_colors'] = []
-        if not data.get('available_fabrics'):
-            data['available_fabrics'] = []
-        
-        # Add computed fields for frontend compatibility
-        data['stock_status'] = 'in_stock' if (data.get('stock') or 0) > 0 else 'out_of_stock'
-        data['total_value'] = float((data.get('stock') or 0) * (data.get('unit_cost') or 0))
-        
-        return data
+        try:
+            data = super().to_representation(instance)
+            
+            # Safely handle available_colors and available_fabrics
+            try:
+                if data.get('available_colors') is None:
+                    data['available_colors'] = []
+                elif not isinstance(data.get('available_colors'), list):
+                    data['available_colors'] = []
+            except Exception:
+                data['available_colors'] = []
+                
+            try:
+                if data.get('available_fabrics') is None:
+                    data['available_fabrics'] = []
+                elif not isinstance(data.get('available_fabrics'), list):
+                    data['available_fabrics'] = []
+            except Exception:
+                data['available_fabrics'] = []
+            
+            # Add computed fields for frontend compatibility
+            try:
+                stock = data.get('stock') or 0
+                unit_cost = data.get('unit_cost') or 0
+                data['stock_status'] = 'in_stock' if stock > 0 else 'out_of_stock'
+                data['total_value'] = float(stock * unit_cost)
+            except Exception:
+                data['stock_status'] = 'unknown'
+                data['total_value'] = 0.0
+            
+            return data
+        except Exception as e:
+            # Fallback representation if something goes wrong
+            print(f"Error in ProductSerializer.to_representation: {e}")
+            return {
+                'id': getattr(instance, 'id', None),
+                'name': getattr(instance, 'name', 'Unknown Product'),
+                'product_name': getattr(instance, 'product_name', 'Unknown Product'),
+                'sku': getattr(instance, 'model_code', 'N/A'),
+                'description': getattr(instance, 'description', ''),
+                'price': float(getattr(instance, 'unit_price', 0)),
+                'available_colors': [],
+                'available_fabrics': [],
+                'stock': getattr(instance, 'stock', 0),
+                'is_active': getattr(instance, 'is_active', False),
+                'available_for_order': getattr(instance, 'available_for_order', False),
+                'error': 'Serialization error occurred'
+            }
 
 
 class MaterialStockUpdateSerializer(serializers.Serializer):
