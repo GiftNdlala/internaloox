@@ -238,7 +238,7 @@ class ProductSerializer(serializers.ModelSerializer):
     available_fabrics = serializers.JSONField(read_only=False)
     
     # Frontend compatibility fields
-    unit_price = serializers.DecimalField(source='unit_price', max_digits=10, decimal_places=2, read_only=True)
+    unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     product_name = serializers.CharField(read_only=True)
     
     class Meta:
