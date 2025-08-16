@@ -323,6 +323,7 @@ class ColorReference(models.Model):
     is_active = models.BooleanField(default=True)
     
     class Meta:
+        db_table = 'orders_colorreference'
         ordering = ['color_code']
     
     def __str__(self):
@@ -336,6 +337,7 @@ class FabricReference(models.Model):
     is_active = models.BooleanField(default=True)
     
     class Meta:
+        db_table = 'orders_fabricreference'
         ordering = ['fabric_letter']
     
     def __str__(self):

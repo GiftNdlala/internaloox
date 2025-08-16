@@ -1809,7 +1809,7 @@ class FabricViewSet(viewsets.ModelViewSet):
 class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.all()
     serializer_class = ProductSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly, CanCreateProducts]
+    permission_classes = [IsAuthenticatedOrReadOnly]  # Allow read access without auth
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['product_name', 'name', 'description', 'model_code']
     ordering_fields = ['created_at', 'product_name', 'unit_price', 'stock']
@@ -1821,7 +1821,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 class ColorReferenceViewSet(viewsets.ModelViewSet):
     queryset = ColorReference.objects.all()
     serializer_class = ColorReferenceSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticatedOrReadOnly]  # Allow read access without auth
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     ordering = ['color_code']
 
@@ -1829,7 +1829,7 @@ class ColorReferenceViewSet(viewsets.ModelViewSet):
 class FabricReferenceViewSet(viewsets.ModelViewSet):
     queryset = FabricReference.objects.all()
     serializer_class = FabricReferenceSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticatedOrReadOnly]  # Allow read access without auth
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     ordering = ['fabric_letter']
 
