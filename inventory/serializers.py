@@ -234,8 +234,8 @@ class ProductSerializer(serializers.ModelSerializer):
     # Map model fields to frontend-expected fields
     sku = serializers.CharField(source='model_code', read_only=True)
     price = serializers.DecimalField(source='unit_price', max_digits=10, decimal_places=2, read_only=True)
-    available_colors = serializers.JSONField(read_only=True)
-    available_fabrics = serializers.JSONField(read_only=True)
+    available_colors = serializers.JSONField(read_only=False)
+    available_fabrics = serializers.JSONField(read_only=False)
     
     # Frontend compatibility fields
     unit_price = serializers.DecimalField(source='unit_price', max_digits=10, decimal_places=2, read_only=True)

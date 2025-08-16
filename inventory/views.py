@@ -775,6 +775,72 @@ class ProductViewSet(viewsets.ModelViewSet):
     search_fields = ['product_name', 'name', 'model_code', 'description']
     ordering = ['-created_at']
     
+    def update(self, request, *args, **kwargs):
+        """Override update method to handle color and fabric updates properly"""
+        try:
+            print(f"ProductViewSet.update called by user: {request.user.username}")
+            print(f"Update data: {request.data}")
+            
+            # Get the product instance
+            instance = self.get_object()
+            
+            # Handle available_colors and available_fabrics updates
+            if 'available_colors' in request.data:
+                colors_data = request.data['available_colors']
+                if isinstance(colors_data, list):
+                    # Validate color data structure
+                    validated_colors = []
+                    for color in colors_data:
+                        if isinstance(color, dict) and 'name' in color:
+                            validated_colors.append({
+                                'name': color.get('name', ''),
+                                'code': color.get('code', color.get('name', '').lower().replace(' ', '_')),
+                                'is_active': color.get('is_active', True)
+                            })
+                        elif isinstance(color, str):
+                            # If it's just a string, convert to proper format
+                            validated_colors.append({
+                                'name': color,
+                                'code': color.lower().replace(' ', '_'),
+                                'is_active': True
+                            })
+                    request.data['available_colors'] = validated_colors
+                    print(f"Validated colors: {validated_colors}")
+            
+            if 'available_fabrics' in request.data:
+                fabrics_data = request.data['available_fabrics']
+                if isinstance(fabrics_data, list):
+                    # Validate fabric data structure
+                    validated_fabrics = []
+                    for fabric in fabrics_data:
+                        if isinstance(fabric, dict) and 'name' in fabric:
+                            validated_fabrics.append({
+                                'name': fabric.get('name', ''),
+                                'code': fabric.get('code', fabric.get('name', '').lower().replace(' ', '_')),
+                                'is_active': fabric.get('is_active', True)
+                            })
+                        elif isinstance(fabric, str):
+                            # If it's just a string, convert to proper format
+                            validated_fabrics.append({
+                                'name': fabric,
+                                'code': fabric.lower().replace(' ', '_'),
+                                'is_active': True
+                            })
+                    request.data['available_fabrics'] = validated_fabrics
+                    print(f"Validated fabrics: {validated_fabrics}")
+            
+            # Call the parent update method
+            return super().update(request, *args, **kwargs)
+            
+        except Exception as e:
+            print(f"Error in ProductViewSet.update: {e}")
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {'error': 'Failed to update product. Please try again.'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
     def list(self, request, *args, **kwargs):
         """Override list method to handle serialization errors gracefully"""
         try:
