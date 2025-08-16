@@ -3,7 +3,7 @@ from .models import (
     MaterialCategory, Supplier, Material, StockMovement,
     ProductMaterial, StockAlert, MaterialConsumptionPrediction
 )
-from orders.models import Product
+
 
 
 class MaterialCategorySerializer(serializers.ModelSerializer):
@@ -201,12 +201,24 @@ class StockMovementSerializer(serializers.ModelSerializer):
 class ProductMaterialSerializer(serializers.ModelSerializer):
     material_name = serializers.CharField(source='material.name', read_only=True)
     material_unit = serializers.CharField(source='material.unit', read_only=True)
-    product_name = serializers.CharField(source='product.product_name', read_only=True)
+    product_name = serializers.CharField(source='product.product_name', read_only=True, allow_null=True)
     total_cost_per_product = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
 
     class Meta:
         model = ProductMaterial
         fields = '__all__'
+    
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Handle case where product might not be available
+        try:
+            if hasattr(instance, 'product') and instance.product:
+                data['product_name'] = instance.product.product_name
+            else:
+                data['product_name'] = 'Unknown Product'
+        except Exception:
+            data['product_name'] = 'Unknown Product'
+        return data
 
 
 class StockAlertSerializer(serializers.ModelSerializer):
@@ -227,90 +239,6 @@ class MaterialConsumptionPredictionSerializer(serializers.ModelSerializer):
         model = MaterialConsumptionPrediction
         fields = '__all__'
         read_only_fields = ['calculated_at']
-
-
-class ProductSerializer(serializers.ModelSerializer):
-    """Product serializer for warehouse management"""
-    # Map model fields to frontend-expected fields
-    sku = serializers.CharField(source='model_code', read_only=True)
-    price = serializers.DecimalField(source='unit_price', max_digits=10, decimal_places=2, read_only=True)
-    available_colors = serializers.JSONField(read_only=False, required=False)
-    available_fabrics = serializers.JSONField(read_only=False, required=False)
-    
-    # Frontend compatibility fields
-    unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
-    product_name = serializers.CharField(read_only=True)
-    
-    class Meta:
-        model = Product
-        fields = [
-            'id', 'name', 'product_name', 'sku', 'model_code', 'description', 'category',
-            'product_type', 'price', 'unit_price', 'unit_cost',
-            'available_colors', 'available_fabrics', 'stock', 'base_price',
-            'is_active', 'available_for_order', 'created_at', 'updated_at'
-        ]
-        read_only_fields = ['created_at', 'updated_at']
-    
-    def validate(self, attrs):
-        """Custom validation for partial updates"""
-        # For partial updates, only validate fields that are being updated
-        if self.partial:
-            # If updating only colors/fabrics, don't require other fields
-            if set(attrs.keys()) <= {'available_colors', 'available_fabrics'}:
-                return attrs
-        
-        # For full updates, ensure required fields are present
-        return super().validate(attrs)
-    
-    def to_representation(self, instance):
-        try:
-            data = super().to_representation(instance)
-            
-            # Safely handle available_colors and available_fabrics
-            try:
-                if data.get('available_colors') is None:
-                    data['available_colors'] = []
-                elif not isinstance(data.get('available_colors'), list):
-                    data['available_colors'] = []
-            except Exception:
-                data['available_colors'] = []
-                
-            try:
-                if data.get('available_fabrics') is None:
-                    data['available_fabrics'] = []
-                elif not isinstance(data.get('available_fabrics'), list):
-                    data['available_fabrics'] = []
-            except Exception:
-                data['available_fabrics'] = []
-            
-            # Add computed fields for frontend compatibility
-            try:
-                stock = data.get('stock') or 0
-                unit_cost = data.get('unit_cost') or 0
-                data['stock_status'] = 'in_stock' if stock > 0 else 'out_of_stock'
-                data['total_value'] = float(stock * unit_cost)
-            except Exception:
-                data['stock_status'] = 'unknown'
-                data['total_value'] = 0.0
-            
-            return data
-        except Exception as e:
-            # Fallback representation if something goes wrong
-            print(f"Error in ProductSerializer.to_representation: {e}")
-            return {
-                'id': getattr(instance, 'id', None),
-                'name': getattr(instance, 'name', 'Unknown Product'),
-                'product_name': getattr(instance, 'product_name', 'Unknown Product'),
-                'sku': getattr(instance, 'model_code', 'N/A'),
-                'description': getattr(instance, 'description', ''),
-                'price': float(getattr(instance, 'unit_price', 0)),
-                'available_colors': [],
-                'available_fabrics': [],
-                'stock': getattr(instance, 'stock', 0),
-                'is_active': getattr(instance, 'is_active', False),
-                'available_for_order': getattr(instance, 'available_for_order', False),
-                'error': 'Serialization error occurred'
-            }
 
 
 class MaterialStockUpdateSerializer(serializers.Serializer):
