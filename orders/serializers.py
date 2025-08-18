@@ -123,13 +123,46 @@ class OrderSerializer(serializers.ModelSerializer):
 		# Create order items
 		for item_data in items_data:
 			print("ORDER CREATE - Creating item:", item_data)
+			# Resolve enhanced code-based assignments
+			assigned_color_code = item_data.get('assigned_color_code') or item_data.get('color_code')
+			assigned_fabric_letter = item_data.get('assigned_fabric_letter') or item_data.get('fabric_letter')
+			color_fk_id = item_data.get('color')
+			fabric_fk_id = item_data.get('fabric')
+
+			# If frontend sent legacy numeric IDs from reference endpoints, map them to codes
+			try:
+				if not assigned_color_code and color_fk_id:
+					# Try resolve to ColorReference id (new reference table)
+					ref = ColorReference.objects.filter(id=color_fk_id).first()
+					if ref:
+						assigned_color_code = ref.color_code
+						color_fk_id = None  # avoid invalid FK to legacy Color table
+			except Exception:
+				pass
+			try:
+				if not assigned_fabric_letter and fabric_fk_id:
+					ref = FabricReference.objects.filter(id=fabric_fk_id).first()
+					if ref:
+						assigned_fabric_letter = ref.fabric_letter
+						fabric_fk_id = None
+			except Exception:
+				pass
+
+			# Only set legacy FKs if they actually exist
+			if color_fk_id and not Color.objects.filter(id=color_fk_id).exists():
+				color_fk_id = None
+			if fabric_fk_id and not Fabric.objects.filter(id=fabric_fk_id).exists():
+				fabric_fk_id = None
+
 			OrderItem.objects.create(
 				order=order,
 				product_id=item_data['product'],
 				quantity=item_data['quantity'],
 				unit_price=item_data['unit_price'],
-				color_id=item_data.get('color'),
-				fabric_id=item_data.get('fabric'),
+				assigned_color_code=(assigned_color_code or ''),
+				assigned_fabric_letter=(assigned_fabric_letter or ''),
+				color_id=color_fk_id,
+				fabric_id=fabric_fk_id,
 				product_description=item_data.get('product_description', '')
 			)
 		
@@ -196,14 +229,42 @@ class OrderSerializer(serializers.ModelSerializer):
 		sent_item_ids = set()
 		for item_data in items_data:
 			item_id = item_data.get('id')
+			# Resolve enhanced code-based assignments and validate legacy FKs
+			assigned_color_code = item_data.get('assigned_color_code') or item_data.get('color_code')
+			assigned_fabric_letter = item_data.get('assigned_fabric_letter') or item_data.get('fabric_letter')
+			color_fk_id = item_data.get('color')
+			fabric_fk_id = item_data.get('fabric')
+			try:
+				if not assigned_color_code and color_fk_id:
+					ref = ColorReference.objects.filter(id=color_fk_id).first()
+					if ref:
+						assigned_color_code = ref.color_code
+						color_fk_id = None
+			except Exception:
+				pass
+			try:
+				if not assigned_fabric_letter and fabric_fk_id:
+					ref = FabricReference.objects.filter(id=fabric_fk_id).first()
+					if ref:
+						assigned_fabric_letter = ref.fabric_letter
+						fabric_fk_id = None
+			except Exception:
+				pass
+			if color_fk_id and not Color.objects.filter(id=color_fk_id).exists():
+				color_fk_id = None
+			if fabric_fk_id and not Fabric.objects.filter(id=fabric_fk_id).exists():
+				fabric_fk_id = None
+
 			if item_id and item_id in existing_items:
 				# Update existing item
 				item = existing_items[item_id]
 				item.product_id = item_data['product']
 				item.quantity = item_data['quantity']
 				item.unit_price = item_data['unit_price']
-				item.color_id = item_data.get('color')
-				item.fabric_id = item_data.get('fabric')
+				item.assigned_color_code = (assigned_color_code or '')
+				item.assigned_fabric_letter = (assigned_fabric_letter or '')
+				item.color_id = color_fk_id
+				item.fabric_id = fabric_fk_id
 				item.save()
 				sent_item_ids.add(item_id)
 			else:
@@ -213,8 +274,10 @@ class OrderSerializer(serializers.ModelSerializer):
 					product_id=item_data['product'],
 					quantity=item_data['quantity'],
 					unit_price=item_data['unit_price'],
-					color_id=item_data.get('color'),
-					fabric_id=item_data.get('fabric')
+					assigned_color_code=(assigned_color_code or ''),
+					assigned_fabric_letter=(assigned_fabric_letter or ''),
+					color_id=color_fk_id,
+					fabric_id=fabric_fk_id
 				)
 		# Delete items not in the update payload
 		for item_id, item in existing_items.items():
