@@ -1173,6 +1173,23 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
                     'tasks': []
                 }
             
+            # Inline order item details for worker UI (product specs per task)
+            order_item_details = None
+            try:
+                if getattr(task, 'order_item', None):
+                    item = task.order_item
+                    order_item_details = {
+                        'id': item.id,
+                        'product_name': getattr(item.product, 'product_name', None) or getattr(item.product, 'name', None),
+                        'quantity': item.quantity,
+                        'unit_price': str(item.unit_price),
+                        'color_name': getattr(item, 'color_name', None),
+                        'fabric_name': getattr(item, 'fabric_name', None),
+                    }
+            except Exception:
+                # Keep endpoint resilient even if related data is missing
+                order_item_details = None
+
             tasks_by_order[order_key]['tasks'].append({
                 'id': task.id,
                 'title': task.title,
@@ -1188,7 +1205,8 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
                 'created_at': task.created_at,
                 'can_start': task.status == 'assigned',
                 'can_pause': task.status == 'started',
-                'can_complete': task.status in ['started', 'paused']
+                'can_complete': task.status in ['started', 'paused'],
+                'order_item_details': order_item_details,
             })
         
         # Convert to list and sort by urgency
