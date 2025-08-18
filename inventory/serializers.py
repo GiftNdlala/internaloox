@@ -113,6 +113,15 @@ class MaterialListSerializer(serializers.ModelSerializer):
             'is_active', 'last_restock_date'
         ]
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Expose frontend-friendly alias for display
+        try:
+            data['unit_price'] = str(instance.cost_per_unit)
+        except Exception:
+            data['unit_price'] = data.get('cost_per_unit')
+        return data
+
 
 class StockMovementSerializer(serializers.ModelSerializer):
     material_name = serializers.SerializerMethodField()
@@ -169,6 +178,8 @@ class StockMovementSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         try:
             print(f"Creating StockMovement with data: {validated_data}")
+            # Remove write-only alias not present on model
+            validated_data.pop('note', None)
             # created_by is set in the view's perform_create method
             return super().create(validated_data)
         except Exception as e:
