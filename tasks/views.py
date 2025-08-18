@@ -1186,6 +1186,15 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
                         'color_name': getattr(item, 'color_name', None),
                         'fabric_name': getattr(item, 'fabric_name', None),
                     }
+                    # Try attach hex color from ColorReference if available
+                    try:
+                        if getattr(item, 'assigned_color_code', None):
+                            from orders.models import ColorReference
+                            ref = ColorReference.objects.filter(color_code=item.assigned_color_code).first()
+                            if ref and ref.hex_color:
+                                order_item_details['hex_color'] = ref.hex_color
+                    except Exception:
+                        pass
             except Exception:
                 # Keep endpoint resilient even if related data is missing
                 order_item_details = None
