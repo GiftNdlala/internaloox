@@ -383,6 +383,62 @@ class ProductSerializer(serializers.ModelSerializer):
 		self._response_attributes = attributes
 		return product
 
+	def update(self, instance, validated_data):
+		# Allow price via aliased field
+		if hasattr(self, 'initial_data') and 'price' in self.initial_data and self.initial_data.get('price') not in [None, ""]:
+			validated_data['unit_price'] = Decimal(str(self.initial_data.get('price')))
+
+		# Extract aliased write-only fields similarly to create()
+		color_name = (self.initial_data.get('color') or '').strip() if hasattr(self, 'initial_data') else ''
+		fabric_name = (self.initial_data.get('fabric') or '').strip() if hasattr(self, 'initial_data') else ''
+		color_list = (self.initial_data.get('colors', []) if hasattr(self, 'initial_data') else []) or []
+		fabric_list = (self.initial_data.get('fabrics', []) if hasattr(self, 'initial_data') else []) or []
+
+		# Build unique sets from singletons + arrays
+		color_values = {v.strip() for v in (([color_name] if color_name else []) + list(color_list)) if isinstance(v, str) and v.strip()}
+		fabric_values = {v.strip() for v in (([fabric_name] if fabric_name else []) + list(fabric_list)) if isinstance(v, str) and v.strip()}
+
+		# Resolve numeric IDs to names if needed
+		if color_list and all(isinstance(c, (int, float)) for c in color_list):
+			try:
+				color_objects = Color.objects.filter(id__in=color_list)
+				color_values.update([c.name for c in color_objects])
+			except Exception:
+				pass
+		if fabric_list and all(isinstance(f, (int, float)) for f in fabric_list):
+			try:
+				fabric_objects = Fabric.objects.filter(id__in=fabric_list)
+				fabric_values.update([f.name for f in fabric_objects])
+			except Exception:
+				pass
+
+		# Apply standard field updates first
+		instance = super().update(instance, validated_data)
+
+		# If aliased fields were provided, update JSON storage
+		if color_values:
+			instance.available_colors = [
+				{'name': n, 'code': n.lower().replace(' ', '_'), 'is_active': True}
+				for n in color_values if n
+			]
+		if fabric_values:
+			instance.available_fabrics = [
+				{'name': n, 'code': n.lower().replace(' ', '_'), 'is_active': True}
+				for n in fabric_values if n
+			]
+		if color_values or fabric_values:
+			instance.save()
+
+		# Echo for response where applicable
+		if color_values:
+			self._response_colors = list(color_values)
+		if fabric_values:
+			self._response_fabrics = list(fabric_values)
+		if hasattr(self, 'initial_data') and 'price' in self.initial_data:
+			self._response_price = Decimal(str(self.initial_data.get('price')))
+
+		return instance
+
 	def to_representation(self, instance):
 		data = super().to_representation(instance)
 		# Map fields back to frontend contract
@@ -405,6 +461,12 @@ class ProductSerializer(serializers.ModelSerializer):
 		
 		data['colors'] = colors_list or []
 		data['fabrics'] = fabrics_list or []
+
+		# Hide duplicated storage fields to reduce payload
+		if 'available_colors' in data:
+			del data['available_colors']
+		if 'available_fabrics' in data:
+			del data['available_fabrics']
 		return data
 
 class ColorSerializer(serializers.ModelSerializer):
