@@ -13,8 +13,12 @@ if python manage.py check --database default; then
   python manage.py migrate --no-input
   echo "[migrate] Migrations complete."
   if python manage.py help setup_mvp_data >/dev/null 2>&1; then
-    echo "[migrate] Seeding MVP data (idempotent)..."
-    python manage.py setup_mvp_data || true
+    if [ "${SEED_MVP_DATA:-false}" = "true" ]; then
+      echo "[migrate] Seeding MVP data (idempotent)..."
+      python manage.py setup_mvp_data || true
+    else
+      echo "[migrate] Skipping MVP data seeding (SEED_MVP_DATA is not true)"
+    fi
   fi
 else
   echo "[migrate] WARNING: Database connection failed; skipping migrations for this deploy stage." >&2

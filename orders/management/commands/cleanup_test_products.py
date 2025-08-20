@@ -1,12 +1,14 @@
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.db.models import Q
 from orders.models import Product
 
 class Command(BaseCommand):
     help = 'Clean up test products created by MVP data script while preserving color and fabric references'
 
     def handle(self, *args, **options):
-        self.stdout.write(self.style.WARNING('Cleaning up test products...'))
+        # Avoid non-ASCII output for Windows consoles
+        self.stdout.write('Cleaning up test products...')
         
         # List of test product names to remove
         test_products = [
@@ -33,19 +35,18 @@ class Command(BaseCommand):
         with transaction.atomic():
             deleted_count = 0
             for product_name in test_products:
-                try:
-                    product = Product.objects.get(product_name=product_name)
-                    product.delete()
-                    self.stdout.write(f'  ✓ Deleted: {product_name}')
-                    deleted_count += 1
-                except Product.DoesNotExist:
-                    self.stdout.write(f'  - Not found: {product_name}')
-            
-            self.stdout.write(
-                self.style.SUCCESS(
-                    f'\n🎉 Cleanup complete!\n'
-                    f'   - {deleted_count} test products removed\n'
-                    f'   - Color and fabric references preserved\n'
-                    f'   - Database cleaned for production use'
-                )
-            )
+                # Match by either product_name or legacy name field
+                qs = Product.objects.filter(Q(product_name=product_name) | Q(name=product_name))
+                found = qs.count()
+                if found:
+                    num_deleted, _ = qs.delete()
+                    deleted_count += num_deleted
+                    self.stdout.write(f'  Deleted: {product_name} (rows: {num_deleted})')
+                else:
+                    self.stdout.write(f'  Not found: {product_name}')
+
+            self.stdout.write('')
+            self.stdout.write('Cleanup complete!')
+            self.stdout.write(f'  - Total rows removed: {deleted_count}')
+            self.stdout.write('  - Color and fabric references preserved')
+            self.stdout.write('  - Database cleaned for production use')
