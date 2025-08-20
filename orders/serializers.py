@@ -90,6 +90,8 @@ class OrderSerializer(serializers.ModelSerializer):
 	payment_proofs = PaymentProofSerializer(many=True, read_only=True)
 	history = OrderHistorySerializer(many=True, read_only=True)
 	items = OrderItemSerializer(many=True, read_only=True)
+	# Add write-only items field for order creation
+	items_data = serializers.ListField(write_only=True, required=False)
 	total_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
 	balance_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
 	
@@ -109,8 +111,15 @@ class OrderSerializer(serializers.ModelSerializer):
 			if field in validated_data and validated_data[field] is not None:
 				validated_data[field] = Decimal(str(validated_data[field]))
 		
-		# Get items data from context or initial_data
-		items_data = self.context.get('items_data', [])
+		# Handle date fields properly
+		# If frontend sends expected_delivery_date, use it as delivery_deadline for new orders
+		if 'expected_delivery_date' in validated_data:
+			validated_data['delivery_deadline'] = validated_data.pop('expected_delivery_date')
+		
+		# Get items data from validated_data, context, or initial_data
+		items_data = validated_data.pop('items_data', [])
+		if not items_data:
+			items_data = self.context.get('items_data', [])
 		if not items_data and 'items' in self.initial_data:
 			items_data = self.initial_data['items']
 		
@@ -119,6 +128,19 @@ class OrderSerializer(serializers.ModelSerializer):
 		validated_data.pop('items_data', None)
 		validated_data['created_by'] = self.context['request'].user
 		order = super().create(validated_data)
+		
+		# Auto-calculate estimated_completion_date to 20 business days from creation
+		from datetime import timedelta
+		from django.utils import timezone
+		
+		business_days = 20
+		current_date = timezone.now().date()
+		while business_days > 0:
+			current_date += timedelta(days=1)
+			if current_date.weekday() < 5:  # Monday to Friday
+				business_days -= 1
+		order.estimated_completion_date = current_date
+		order.save()
 		
 		# Create order items
 		for item_data in items_data:
