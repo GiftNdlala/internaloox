@@ -118,6 +118,7 @@ class OrderSerializer(serializers.ModelSerializer):
 	def create(self, validated_data):
 		print("ORDER CREATE - validated_data:", validated_data)
 		print("ORDER CREATE - initial_data:", self.initial_data)
+		print("ORDER CREATE - context:", self.context)
 		
 		# Ensure total_amount, deposit_amount, balance_amount are Decimal
 		for field in ['total_amount', 'deposit_amount', 'balance_amount']:
@@ -153,10 +154,20 @@ class OrderSerializer(serializers.ModelSerializer):
 			items_data = self.initial_data['items']
 		
 		print("ORDER CREATE - items_data:", items_data)
+		print("ORDER CREATE - items_data type:", type(items_data))
+		print("ORDER CREATE - items_data length:", len(items_data) if items_data else 0)
+		
+		# Validate items_data structure
+		if items_data:
+			for i, item in enumerate(items_data):
+				print(f"ORDER CREATE - Item {i}: {item}")
+				print(f"ORDER CREATE - Item {i} keys: {list(item.keys()) if isinstance(item, dict) else 'Not a dict'}")
 		
 		validated_data.pop('items_data', None)
 		validated_data['created_by'] = self.context['request'].user
 		order = super().create(validated_data)
+		
+		print(f"ORDER CREATE - Order created with ID: {order.id}")
 		
 		# Auto-calculate estimated_completion_date to 20 business days from creation
 		from datetime import timedelta
@@ -172,70 +183,88 @@ class OrderSerializer(serializers.ModelSerializer):
 		order.save()
 		
 		# Create order items
+		created_items = []
 		for item_data in items_data:
 			print("ORDER CREATE - Creating item:", item_data)
-			# Resolve enhanced code-based assignments
-			assigned_color_code = item_data.get('assigned_color_code') or item_data.get('color_code')
-			assigned_fabric_letter = item_data.get('assigned_fabric_letter') or item_data.get('fabric_letter')
-			color_fk_id = item_data.get('color')
-			fabric_fk_id = item_data.get('fabric')
-
-			# If frontend sent legacy numeric IDs from reference endpoints, map them to codes
 			try:
-				if not assigned_color_code and color_fk_id:
-					# Try resolve to ColorReference id (new reference table)
-					ref = ColorReference.objects.filter(id=color_fk_id).first()
-					if ref:
-						assigned_color_code = ref.color_code
-						color_fk_id = None  # avoid invalid FK to legacy Color table
-					else:
-						# Try legacy Color table as fallback
-						legacy_color = Color.objects.filter(id=color_fk_id).first()
-						if legacy_color:
-							# Map legacy color to reference code if possible
-							ref = ColorReference.objects.filter(color_name__iexact=legacy_color.name).first()
-							if ref:
-								assigned_color_code = ref.color_code
-							color_fk_id = None  # avoid invalid FK
-			except Exception:
-				pass
-			try:
-				if not assigned_fabric_letter and fabric_fk_id:
-					ref = FabricReference.objects.filter(id=fabric_fk_id).first()
-					if ref:
-						assigned_fabric_letter = ref.fabric_letter
-						fabric_fk_id = None
-					else:
-						# Try legacy Fabric table as fallback
-						legacy_fabric = Fabric.objects.filter(id=fabric_fk_id).first()
-						if legacy_fabric:
-							# Map legacy fabric to reference letter if possible
-							ref = FabricReference.objects.filter(fabric_name__iexact=legacy_fabric.name).first()
-							if ref:
-								assigned_fabric_letter = ref.fabric_letter
-							fabric_fk_id = None  # avoid invalid FK
-			except Exception:
-				pass
+				# Resolve enhanced code-based assignments
+				assigned_color_code = item_data.get('assigned_color_code') or item_data.get('color_code')
+				assigned_fabric_letter = item_data.get('assigned_fabric_letter') or item_data.get('fabric_letter')
+				color_fk_id = item_data.get('color')
+				fabric_fk_id = item_data.get('fabric')
 
-			# Only set legacy FKs if they actually exist
-			if color_fk_id and not Color.objects.filter(id=color_fk_id).exists():
-				color_fk_id = None
-			if fabric_fk_id and not Fabric.objects.filter(id=fabric_fk_id).exists():
-				fabric_fk_id = None
+				print(f"ORDER CREATE - Color code: {assigned_color_code}, Fabric letter: {assigned_fabric_letter}")
+				print(f"ORDER CREATE - Color FK: {color_fk_id}, Fabric FK: {fabric_fk_id}")
 
-			OrderItem.objects.create(
-				order=order,
-				product_id=item_data['product'],
-				quantity=item_data['quantity'],
-				unit_price=item_data['unit_price'],
-				assigned_color_code=(assigned_color_code or ''),
-				assigned_fabric_letter=(assigned_fabric_letter or ''),
-				color_id=color_fk_id,
-				fabric_id=fabric_fk_id,
-				product_description=item_data.get('product_description', '')
-			)
+				# If frontend sent legacy numeric IDs from reference endpoints, map them to codes
+				try:
+					if not assigned_color_code and color_fk_id:
+						# Try resolve to ColorReference id (new reference table)
+						ref = ColorReference.objects.filter(id=color_fk_id).first()
+						if ref:
+							assigned_color_code = ref.color_code
+							color_fk_id = None  # avoid invalid FK to legacy Color table
+						else:
+							# Try legacy Color table as fallback
+							legacy_color = Color.objects.filter(id=color_fk_id).first()
+							if legacy_color:
+								# Map legacy color to reference code if possible
+								ref = ColorReference.objects.filter(color_name__iexact=legacy_color.name).first()
+								if ref:
+									assigned_color_code = ref.color_code
+								color_fk_id = None  # avoid invalid FK
+				except Exception as e:
+					print(f"ORDER CREATE - Error processing color: {e}")
+					pass
+				try:
+					if not assigned_fabric_letter and fabric_fk_id:
+						ref = FabricReference.objects.filter(id=fabric_fk_id).first()
+						if ref:
+							assigned_fabric_letter = ref.fabric_letter
+							fabric_fk_id = None
+						else:
+							# Try legacy Fabric table as fallback
+							legacy_fabric = Fabric.objects.filter(id=fabric_fk_id).first()
+							if legacy_fabric:
+								# Map legacy fabric to reference letter if possible
+								ref = FabricReference.objects.filter(fabric_name__iexact=legacy_fabric.name).first()
+								if ref:
+									assigned_fabric_letter = ref.fabric_letter
+								fabric_fk_id = None  # avoid invalid FK
+				except Exception as e:
+					print(f"ORDER CREATE - Error processing fabric: {e}")
+					pass
+
+				# Only set legacy FKs if they actually exist
+				if color_fk_id and not Color.objects.filter(id=color_fk_id).exists():
+					color_fk_id = None
+				if fabric_fk_id and not Fabric.objects.filter(id=fabric_fk_id).exists():
+					fabric_fk_id = None
+
+				# Create the OrderItem
+				order_item = OrderItem.objects.create(
+					order=order,
+					product_id=item_data['product'],
+					quantity=item_data['quantity'],
+					unit_price=item_data['unit_price'],
+					assigned_color_code=(assigned_color_code or ''),
+					assigned_fabric_letter=(assigned_fabric_letter or ''),
+					color_id=color_fk_id,
+					fabric_id=fabric_fk_id,
+					product_description=item_data.get('product_description', '')
+				)
+				
+				created_items.append(order_item)
+				print(f"ORDER CREATE - Successfully created OrderItem {order_item.id}")
+				
+			except Exception as e:
+				print(f"ORDER CREATE - ERROR creating OrderItem: {e}")
+				print(f"ORDER CREATE - Item data that failed: {item_data}")
+				# Continue with other items instead of failing the entire order
+				continue
 		
-		print("ORDER CREATE - Order created successfully with", len(items_data), "items")
+		print("ORDER CREATE - Order created successfully with", len(created_items), "items")
+		print("ORDER CREATE - Created item IDs:", [item.id for item in created_items])
 		return order
 
 	def update(self, instance, validated_data):

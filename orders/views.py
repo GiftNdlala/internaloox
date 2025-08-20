@@ -721,6 +721,10 @@ class OrderViewSet(viewsets.ModelViewSet):
         
         orders_data = []
         for order in warehouse_orders:
+            # Debug logging to understand why orders have no items
+            print(f"DEBUG: Processing order {order.id} ({order.order_number})")
+            print(f"DEBUG: Order has {order.items.count()} items")
+            
             # Calculate estimated completion date based on tasks
             total_estimated_time = timedelta(0)
             assigned_tasks = order.tasks.all()
@@ -749,6 +753,8 @@ class OrderViewSet(viewsets.ModelViewSet):
             # Get order items with detailed specifications
             items_data = []
             for item in order.items.all():
+                print(f"DEBUG: Processing order item {item.id} for product {item.product.product_name if item.product else 'Unknown'}")
+                
                 # Get hex color from ColorReference if available
                 hex_color = None
                 if item.assigned_color_code:
@@ -773,6 +779,15 @@ class OrderViewSet(viewsets.ModelViewSet):
                     'total_price': float(item.total_price)
                 })
             
+            # If order has no items, log this as a potential issue
+            if not items_data:
+                print(f"WARNING: Order {order.id} ({order.order_number}) has no items!")
+                print(f"WARNING: This suggests an issue with order creation or data migration")
+                # Still include the order but mark it as problematic
+                can_create_tasks = False
+            else:
+                can_create_tasks = True
+            
             orders_data.append({
                 'id': order.id,
                 'order_number': order.order_number,
@@ -785,11 +800,11 @@ class OrderViewSet(viewsets.ModelViewSet):
                 'total_amount': float(order.total_amount),
                 'estimated_completion_time': str(total_estimated_time),
                 'task_counts': task_counts,
-                'items_count': order.items.count(),
+                'items_count': len(items_data),
                 'items': items_data,  # Include detailed order items
                 'created_at': order.created_at,
                 'is_priority_order': order.is_priority_order,
-                'can_create_tasks': True  # Frontend expects this field
+                'can_create_tasks': can_create_tasks  # Only true if order has items
             })
         
         # Sort by urgency and deadline
