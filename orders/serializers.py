@@ -114,7 +114,23 @@ class OrderSerializer(serializers.ModelSerializer):
 		# Handle date fields properly
 		# If frontend sends expected_delivery_date, use it as delivery_deadline for new orders
 		if 'expected_delivery_date' in validated_data:
-			validated_data['delivery_deadline'] = validated_data.pop('expected_delivery_date')
+			delivery_date = validated_data.pop('expected_delivery_date')
+			print(f"ORDER CREATE - Processing delivery date: {delivery_date} (type: {type(delivery_date)})")
+			if delivery_date:
+				try:
+					# Ensure it's a valid date string
+					from datetime import datetime
+					if isinstance(delivery_date, str):
+						# Parse and validate the date string
+						parsed_date = datetime.strptime(delivery_date, '%Y-%m-%d').date()
+						validated_data['delivery_deadline'] = parsed_date
+						print(f"ORDER CREATE - Successfully parsed delivery date: {parsed_date}")
+					else:
+						validated_data['delivery_deadline'] = delivery_date
+				except ValueError as e:
+					print(f"ORDER CREATE - Date parsing error: {e}")
+					# Don't set the date if it's invalid
+					pass
 		
 		# Get items data from validated_data, context, or initial_data
 		items_data = validated_data.pop('items_data', [])
