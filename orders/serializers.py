@@ -147,16 +147,19 @@ class OrderSerializer(serializers.ModelSerializer):
 					pass
 		
 		# Get items data from validated_data, context, or initial_data
-		items_data = validated_data.pop('items_data', [])
+		items_data = validated_data.pop('items_data', None)
 		if not items_data:
-			items_data = self.context.get('items_data', [])
-		if not items_data and 'items' in self.initial_data:
-			items_data = self.initial_data['items']
-		
+			# Try context
+			items_data = self.context.get('items_data', None)
+		if not items_data:
+			# Try initial_data['items_data'] (frontend contract)
+			items_data = self.initial_data.get('items_data', None)
+		if not items_data:
+			# Try initial_data['items'] (legacy fallback)
+			items_data = self.initial_data.get('items', [])
 		print("ORDER CREATE - items_data:", items_data)
 		print("ORDER CREATE - items_data type:", type(items_data))
 		print("ORDER CREATE - items_data length:", len(items_data) if items_data else 0)
-		
 		# Validate items_data structure
 		if items_data:
 			for i, item in enumerate(items_data):
