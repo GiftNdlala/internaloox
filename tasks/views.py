@@ -1195,6 +1195,40 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
                                 order_item_details['hex_color'] = ref.hex_color
                     except Exception:
                         pass
+                else:
+                    # If no specific order_item assigned to task, get all order items for context
+                    if task.order and task.order.items.exists():
+                        items_data = []
+                        for item in task.order.items.all():
+                            # Get hex color from ColorReference if available
+                            hex_color = None
+                            if item.assigned_color_code:
+                                try:
+                                    from orders.models import ColorReference
+                                    color_ref = ColorReference.objects.filter(color_code=item.assigned_color_code).first()
+                                    if color_ref and color_ref.hex_color:
+                                        hex_color = color_ref.hex_color
+                                except Exception:
+                                    pass
+                            
+                            items_data.append({
+                                'id': item.id,
+                                'product_name': item.product.product_name if item.product else 'Unknown Product',
+                                'quantity': item.quantity,
+                                'unit_price': float(item.unit_price),
+                                'fabric_letter': item.assigned_fabric_letter,
+                                'color_code': item.assigned_color_code,
+                                'fabric_name': item.fabric_name,
+                                'color_name': item.color_name,
+                                'hex_color': hex_color,
+                                'total_price': float(item.total_price)
+                            })
+                        
+                        order_item_details = {
+                            'order_items': items_data,
+                            'total_items': len(items_data),
+                            'note': 'Showing all order items (no specific item assigned to this task)'
+                        }
             except Exception:
                 # Keep endpoint resilient even if related data is missing
                 order_item_details = None

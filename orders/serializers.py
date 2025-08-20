@@ -114,7 +114,7 @@ class OrderSerializer(serializers.ModelSerializer):
 			raise serializers.ValidationError({'balance_amount': 'This field is required for new orders.'})
 		
 		return attrs
-
+	
 	def create(self, validated_data):
 		print("ORDER CREATE - validated_data:", validated_data)
 		print("ORDER CREATE - initial_data:", self.initial_data)
