@@ -92,8 +92,8 @@ class OrderSerializer(serializers.ModelSerializer):
 	items = OrderItemSerializer(many=True, read_only=True)
 	# Add write-only items field for order creation
 	items_data = serializers.ListField(write_only=True, required=False)
-	total_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
-	balance_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+	total_amount = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
+	balance_amount = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
 	
 	class Meta:
 		model = Order
@@ -102,6 +102,19 @@ class OrderSerializer(serializers.ModelSerializer):
 			'order_number', 'created_by', 'created_at', 'updated_at'
 		]
 	
+	def validate(self, attrs):
+		# For updates, financial fields are optional
+		if self.instance:  # This is an update
+			return attrs
+		
+		# For creation, financial fields are required
+		if not attrs.get('total_amount'):
+			raise serializers.ValidationError({'total_amount': 'This field is required for new orders.'})
+		if not attrs.get('balance_amount'):
+			raise serializers.ValidationError({'balance_amount': 'This field is required for new orders.'})
+		
+		return attrs
+
 	def create(self, validated_data):
 		print("ORDER CREATE - validated_data:", validated_data)
 		print("ORDER CREATE - initial_data:", self.initial_data)
