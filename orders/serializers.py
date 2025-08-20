@@ -188,6 +188,15 @@ class OrderSerializer(serializers.ModelSerializer):
 					if ref:
 						assigned_color_code = ref.color_code
 						color_fk_id = None  # avoid invalid FK to legacy Color table
+					else:
+						# Try legacy Color table as fallback
+						legacy_color = Color.objects.filter(id=color_fk_id).first()
+						if legacy_color:
+							# Map legacy color to reference code if possible
+							ref = ColorReference.objects.filter(color_name__iexact=legacy_color.name).first()
+							if ref:
+								assigned_color_code = ref.color_code
+							color_fk_id = None  # avoid invalid FK
 			except Exception:
 				pass
 			try:
@@ -196,6 +205,15 @@ class OrderSerializer(serializers.ModelSerializer):
 					if ref:
 						assigned_fabric_letter = ref.fabric_letter
 						fabric_fk_id = None
+					else:
+						# Try legacy Fabric table as fallback
+						legacy_fabric = Fabric.objects.filter(id=fabric_fk_id).first()
+						if legacy_fabric:
+							# Map legacy fabric to reference letter if possible
+							ref = FabricReference.objects.filter(fabric_name__iexact=legacy_fabric.name).first()
+							if ref:
+								assigned_fabric_letter = ref.fabric_letter
+							fabric_fk_id = None  # avoid invalid FK
 			except Exception:
 				pass
 
@@ -291,6 +309,15 @@ class OrderSerializer(serializers.ModelSerializer):
 					if ref:
 						assigned_color_code = ref.color_code
 						color_fk_id = None
+					else:
+						# Try legacy Color table as fallback
+						legacy_color = Color.objects.filter(id=color_fk_id).first()
+						if legacy_color:
+							# Map legacy color to reference code if possible
+							ref = ColorReference.objects.filter(color_name__iexact=legacy_color.name).first()
+							if ref:
+								assigned_color_code = ref.color_code
+							color_fk_id = None  # avoid invalid FK
 			except Exception:
 				pass
 			try:
@@ -299,6 +326,15 @@ class OrderSerializer(serializers.ModelSerializer):
 					if ref:
 						assigned_fabric_letter = ref.fabric_letter
 						fabric_fk_id = None
+					else:
+						# Try legacy Fabric table as fallback
+						legacy_fabric = Fabric.objects.filter(id=fabric_fk_id).first()
+						if legacy_fabric:
+							# Map legacy fabric to reference letter if possible
+							ref = FabricReference.objects.filter(fabric_name__iexact=legacy_fabric.name).first()
+							if ref:
+								assigned_fabric_letter = ref.fabric_letter
+							fabric_fk_id = None  # avoid invalid FK
 			except Exception:
 				pass
 			if color_fk_id and not Color.objects.filter(id=color_fk_id).exists():
