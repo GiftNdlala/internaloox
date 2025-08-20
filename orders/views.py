@@ -746,6 +746,33 @@ class OrderViewSet(viewsets.ModelViewSet):
                 'completed': assigned_tasks.filter(status__in=['completed', 'approved']).count(),
             }
             
+            # Get order items with detailed specifications
+            items_data = []
+            for item in order.items.all():
+                # Get hex color from ColorReference if available
+                hex_color = None
+                if item.assigned_color_code:
+                    try:
+                        from .models import ColorReference
+                        color_ref = ColorReference.objects.filter(color_code=item.assigned_color_code).first()
+                        if color_ref and color_ref.hex_color:
+                            hex_color = color_ref.hex_color
+                    except Exception:
+                        pass
+                
+                items_data.append({
+                    'id': item.id,
+                    'product_name': item.product.product_name if item.product else 'Unknown Product',
+                    'quantity': item.quantity,
+                    'unit_price': float(item.unit_price),
+                    'fabric_letter': item.assigned_fabric_letter,
+                    'color_code': item.assigned_color_code,
+                    'fabric_name': item.fabric_name,
+                    'color_name': item.color_name,
+                    'hex_color': hex_color,  # Include hex color for UI display
+                    'total_price': float(item.total_price)
+                })
+            
             orders_data.append({
                 'id': order.id,
                 'order_number': order.order_number,
@@ -759,6 +786,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 'estimated_completion_time': str(total_estimated_time),
                 'task_counts': task_counts,
                 'items_count': order.items.count(),
+                'items': items_data,  # Include detailed order items
                 'created_at': order.created_at,
                 'is_priority_order': order.is_priority_order,
                 'can_create_tasks': True  # Frontend expects this field
@@ -1530,9 +1558,23 @@ class OrderViewSet(viewsets.ModelViewSet):
                     }, status=status.HTTP_400_BAD_REQUEST)
             
             # Compute deltas for transaction log
-            deposit_delta = (order.deposit_amount - old_values['deposit_amount']) if deposit_amount is not None else 0
-            balance_delta = (order.balance_amount - old_values['balance_amount']) if balance_amount is not None else 0
-            total_delta = (order.total_amount - old_values['total_amount']) if total_amount is not None else 0
+            # For status changes, we want to show the actual amounts, not just the differences
+            if payment_status == 'deposit_paid' and old_values['payment_status'] != 'deposit_paid':
+                # When status changes to deposit_paid, show the actual deposit amount
+                deposit_delta = order.deposit_amount
+                total_delta = order.total_amount
+                balance_delta = order.balance_amount
+            elif payment_status == 'fully_paid' and old_values['payment_status'] != 'fully_paid':
+                # When status changes to fully_paid, show the remaining balance as delta
+                deposit_delta = 0
+                total_delta = 0
+                balance_delta = order.balance_amount
+            else:
+                # For amount updates, show the differences
+                deposit_delta = (order.deposit_amount - old_values['deposit_amount']) if deposit_amount is not None else 0
+                balance_delta = (order.balance_amount - old_values['balance_amount']) if balance_amount is not None else 0
+                total_delta = (order.total_amount - old_values['total_amount']) if total_amount is not None else 0
+            
             previous_balance = old_values['balance_amount']
             new_balance = order.balance_amount if balance_amount is not None else previous_balance
             amount_delta = previous_balance - new_balance  # positive means outstanding reduced
