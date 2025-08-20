@@ -308,17 +308,20 @@ class OrderViewSet(viewsets.ModelViewSet):
             # Update production status
             order.production_status = new_production_status
             
-            # Special handling for completed status
+            # Special handling for completed status - don't auto-change order status
+            # Let frontend handle the transition through ready_for_delivery
             if new_production_status == 'completed':
-                order.order_status = 'order_ready'
+                # Keep current order status - frontend will handle the transition
                 # Set expected delivery date if not already set
                 if not order.expected_delivery_date:
                     from datetime import date, timedelta
                     order.expected_delivery_date = date.today() + timedelta(days=3)
             
-            # Special handling for ready_for_delivery status
+            # Special handling for ready_for_delivery status - don't auto-change order status
+            # Let frontend handle address prompt and status transition
             elif new_production_status == 'ready_for_delivery':
-                order.order_status = 'order_ready'
+                # Keep current order status - frontend will handle the transition
+                pass
             
             order.save()
             
@@ -363,7 +366,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             # Workers can only mark deposit_paid -> order_ready
             if user.role == 'warehouse_worker':
                 return current_status == 'deposit_paid' and new_status == 'order_ready'
-            # Warehouse (manager) can also move order_ready -> out_for_delivery
+            # Warehouse (manager) can move order_ready -> out_for_delivery
             if user.role == 'warehouse':
                 allowed_transitions = {
                     'deposit_paid': ['order_ready'],
@@ -375,7 +378,6 @@ class OrderViewSet(viewsets.ModelViewSet):
         if user.role == 'delivery':
             current_status = order.order_status
             allowed_transitions = {
-                'order_ready': ['out_for_delivery'],
                 'out_for_delivery': ['delivered']
             }
             return new_status in allowed_transitions.get(current_status, [])
@@ -392,7 +394,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         if user.role in ['warehouse_worker', 'warehouse']:
             # Define allowed production status transitions
             production_flow = [
-                'not_started', 'cutting', 'sewing', 'finishing', 'quality_check', 'completed'
+                'not_started', 'cutting', 'sewing', 'finishing', 'quality_check', 'completed', 'ready_for_delivery'
             ]
             current_index = production_flow.index(order.production_status) if order.production_status in production_flow else 0
             new_index = production_flow.index(new_status) if new_status in production_flow else -1
@@ -1021,7 +1023,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         # Orders needing attention
         pending_orders = all_orders.filter(order_status='deposit_pending')
         in_production = all_orders.filter(production_status__in=['cutting', 'sewing', 'finishing'])
-        ready_for_delivery = all_orders.filter(order_status='order_ready')
+        ready_for_delivery = all_orders.filter(production_status='ready_for_delivery')
         
         # Recent activity
         recent_orders = all_orders.order_by('-updated_at')[:15]
@@ -1112,7 +1114,6 @@ class OrderViewSet(viewsets.ModelViewSet):
         delivery_orders = self.get_queryset()
         
         # Orders by delivery status
-        ready_for_delivery = delivery_orders.filter(order_status='order_ready')
         out_for_delivery = delivery_orders.filter(order_status='out_for_delivery')
         delivered = delivery_orders.filter(order_status='delivered')
         
@@ -1139,13 +1140,11 @@ class OrderViewSet(viewsets.ModelViewSet):
             },
             'statistics': {
                 'total_orders': delivery_orders.count(),
-                'ready_for_delivery': ready_for_delivery.count(),
                 'out_for_delivery': out_for_delivery.count(),
                 'delivered': delivered.count(),
                 'todays_deliveries': todays_deliveries.count()
             },
             'delivery_stages': {
-                'ready_for_delivery': OrderListSerializer(ready_for_delivery, many=True).data,
                 'out_for_delivery': OrderListSerializer(out_for_delivery, many=True).data,
                 'delivered': OrderListSerializer(delivered[:10], many=True).data  # Recent deliveries
             },
@@ -1502,9 +1501,10 @@ class OrderViewSet(viewsets.ModelViewSet):
                     order.order_status = 'deposit_paid'
                     changes.append("Activated production queue (deposit paid)")
                 
-                # Special handling for fully_paid status
+                # Special handling for fully_paid status - don't auto-change order status
+                # Let frontend handle the transition through ready_for_delivery
                 elif payment_status == 'fully_paid':
-                    order.order_status = 'order_ready'
+                    # Keep current order status - frontend will handle the transition
                     changes.append("Order marked as fully paid - ready for production")
             
             # Update additional payment fields if provided
@@ -1896,7 +1896,7 @@ class OrderItemViewSet(viewsets.ModelViewSet):
                     'quality_check': warehouse_orders.filter(production_status='quality_check').count(),
                     'completed': warehouse_orders.filter(production_status='completed').count(),
                     'in_production': warehouse_orders.filter(production_status='in_production').count(),
-                    'ready_for_delivery': warehouse_orders.filter(order_status='order_ready').count(),
+                    'ready_for_delivery': warehouse_orders.filter(production_status='ready_for_delivery').count(),
                     'orders': OrderListSerializer(warehouse_orders[:10], many=True).data
                 }
             except Exception as e:

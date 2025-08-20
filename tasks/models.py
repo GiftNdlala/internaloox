@@ -303,10 +303,9 @@ class Task(models.Model):
             if order.production_status != 'completed':
                 order.production_status = 'completed'
                 changed = True
-            # Move to ready for delivery queue if not already in delivery flow
-            if order.order_status not in ['out_for_delivery', 'delivered'] and order.order_status != 'order_ready':
-                order.order_status = 'order_ready'
-                changed = True
+            # Don't auto-set order_status to 'order_ready' - let frontend handle address prompt
+            # Keep current order status - frontend will handle the transition through ready_for_delivery
+            pass
             if changed:
                 order.save()
                 try:
