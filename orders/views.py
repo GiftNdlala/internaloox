@@ -1157,7 +1157,8 @@ class OrderViewSet(viewsets.ModelViewSet):
         """Delivery dashboard: Delivery-focused order view with detailed item specifications"""
         user = request.user
         
-        if user.role != 'delivery':
+        # Align backend permissions with frontend route which allows delivery, owner, and admin
+        if user.role not in ['delivery', 'owner', 'admin']:
             return Response({'error': 'Access denied: Delivery access required'}, status=status.HTTP_403_FORBIDDEN)
         
         # Get orders relevant to delivery

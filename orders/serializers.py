@@ -87,13 +87,61 @@ class OrderHistorySerializer(serializers.ModelSerializer):
 		read_only_fields = ['user', 'timestamp']
 
 class OrderItemSerializer(serializers.ModelSerializer):
-	product_name = serializers.CharField(source='product.name', read_only=True)
-	color_name = serializers.CharField(source='color.name', read_only=True)
-	fabric_name = serializers.CharField(source='fabric.name', read_only=True)
-	
+	# Ensure product name resolves correctly to Product.product_name
+	product_name = serializers.SerializerMethodField(read_only=True)
+	# Prefer enhanced code-based names on the model properties; fall back to legacy FKs
+	color_name = serializers.SerializerMethodField(read_only=True)
+	fabric_name = serializers.SerializerMethodField(read_only=True)
+	# Useful for UI color swatch
+	hex_color = serializers.SerializerMethodField(read_only=True)
+	# Convenience for UI display
+	total_price = serializers.SerializerMethodField(read_only=True)
+
 	class Meta:
 		model = OrderItem
-		fields = '__all__'
+		fields = [
+			'id', 'order', 'product', 'quantity', 'unit_price',
+			'assigned_fabric_letter', 'assigned_color_code', 'color', 'fabric', 'product_description',
+			'product_name', 'color_name', 'fabric_name', 'hex_color', 'total_price'
+		]
+
+	def get_product_name(self, obj):
+		try:
+			return getattr(obj.product, 'product_name', None) or getattr(obj.product, 'name', None)
+		except Exception:
+			return None
+
+	def get_color_name(self, obj):
+		# Use enhanced property that resolves from ColorReference via assigned_color_code
+		try:
+			return obj.color_name
+		except Exception:
+			# Legacy fallback
+			return getattr(getattr(obj, 'color', None), 'name', None)
+
+	def get_fabric_name(self, obj):
+		# Use enhanced property that resolves from FabricReference via assigned_fabric_letter
+		try:
+			return obj.fabric_name
+		except Exception:
+			# Legacy fallback
+			return getattr(getattr(obj, 'fabric', None), 'name', None)
+
+	def get_hex_color(self, obj):
+		try:
+			from .models import ColorReference
+			if obj.assigned_color_code:
+				ref = ColorReference.objects.filter(color_code=obj.assigned_color_code).first()
+				return ref.hex_color if ref and getattr(ref, 'hex_color', None) else None
+		except Exception:
+			pass
+		return None
+
+	def get_total_price(self, obj):
+		try:
+			return float(obj.total_price)
+		except Exception:
+			return None
 
 class OrderSerializer(serializers.ModelSerializer):
 	customer = CustomerSerializer(read_only=True)
