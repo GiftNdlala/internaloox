@@ -53,15 +53,30 @@ class PaymentTransactionSerializer(serializers.ModelSerializer):
 	order_number = serializers.CharField(source='order.order_number', read_only=True)
 	proof = PaymentProofSerializer(read_only=True)
 	
+	# Computed field for transaction amount display
+	transaction_amount = serializers.SerializerMethodField()
+	
 	class Meta:
 		model = PaymentTransaction
 		fields = [
 			'id', 'order', 'order_number', 'actor_user',
 			'total_amount_delta', 'deposit_delta', 'balance_delta',
 			'amount_delta', 'previous_balance', 'new_balance',
-			'payment_method', 'payment_status', 'proof', 'notes', 'created_at'
+			'payment_method', 'payment_status', 'proof', 'notes', 'created_at',
+			'transaction_amount'  # Include the computed field
 		]
 		read_only_fields = fields
+	
+	def get_transaction_amount(self, obj):
+		"""Compute the actual transaction amount for display purposes"""
+		# For status changes, show the actual amounts
+		if obj.payment_status == 'deposit_paid':
+			return float(obj.deposit_delta) if obj.deposit_delta else 0
+		elif obj.payment_status == 'fully_paid':
+			return float(obj.balance_delta) if obj.balance_delta else 0
+		else:
+			# For amount updates, show the amount delta (positive means outstanding reduced)
+			return float(obj.amount_delta) if obj.amount_delta else 0
 
 class OrderHistorySerializer(serializers.ModelSerializer):
 	user = UserSerializer(read_only=True)

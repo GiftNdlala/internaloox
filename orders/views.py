@@ -763,8 +763,13 @@ class OrderViewSet(viewsets.ModelViewSet):
                         color_ref = ColorReference.objects.filter(color_code=item.assigned_color_code).first()
                         if color_ref and color_ref.hex_color:
                             hex_color = color_ref.hex_color
-                    except Exception:
-                        pass
+                            print(f"DEBUG: Found hex_color {hex_color} for color_code {item.assigned_color_code}")
+                        else:
+                            print(f"DEBUG: No hex_color found for color_code {item.assigned_color_code}")
+                    except Exception as e:
+                        print(f"DEBUG: Error getting hex_color for color_code {item.assigned_color_code}: {e}")
+                else:
+                    print(f"DEBUG: No assigned_color_code for item {item.id}")
                 
                 items_data.append({
                     'id': item.id,
@@ -778,6 +783,8 @@ class OrderViewSet(viewsets.ModelViewSet):
                     'hex_color': hex_color,  # Include hex color for UI display
                     'total_price': float(item.total_price)
                 })
+                
+                print(f"DEBUG: Final item data: {items_data[-1]}")
             
             # If order has no items, log this as a potential issue
             if not items_data:
@@ -1147,7 +1154,7 @@ class OrderViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'])
     def delivery_dashboard_orders(self, request):
-        """Delivery dashboard: Delivery-focused order view"""
+        """Delivery dashboard: Delivery-focused order view with detailed item specifications"""
         user = request.user
         
         if user.role != 'delivery':
@@ -1171,6 +1178,46 @@ class OrderViewSet(viewsets.ModelViewSet):
             order_status__in=['order_ready', 'out_for_delivery']
         )
         
+        # Enhanced serializer for delivery orders with item details
+        def get_delivery_order_data(orders):
+            """Get enhanced order data with item specifications for delivery verification"""
+            orders_data = []
+            for order in orders:
+                # Get order items with detailed specifications
+                items_data = []
+                for item in order.items.all():
+                    # Get hex color from ColorReference if available
+                    hex_color = None
+                    if item.assigned_color_code:
+                        try:
+                            from .models import ColorReference
+                            color_ref = ColorReference.objects.filter(color_code=item.assigned_color_code).first()
+                            if color_ref and color_ref.hex_color:
+                                hex_color = color_ref.hex_color
+                        except Exception:
+                            pass
+                    
+                    items_data.append({
+                        'id': item.id,
+                        'product_name': item.product.product_name if item.product else 'Unknown Product',
+                        'quantity': item.quantity,
+                        'unit_price': float(item.unit_price),
+                        'fabric_letter': item.assigned_fabric_letter,
+                        'color_code': item.assigned_color_code,
+                        'fabric_name': item.fabric_name,
+                        'color_name': item.color_name,
+                        'hex_color': hex_color,  # Include hex color for UI display
+                        'total_price': float(item.total_price)
+                    })
+                
+                # Create enhanced order data
+                order_data = OrderListSerializer(order).data
+                order_data['items'] = items_data
+                order_data['total_items'] = len(items_data)
+                orders_data.append(order_data)
+            
+            return orders_data
+        
         return Response({
             'dashboard_type': 'delivery',
             'permissions': {
@@ -1188,11 +1235,11 @@ class OrderViewSet(viewsets.ModelViewSet):
                 'todays_deliveries': todays_deliveries.count()
             },
             'delivery_stages': {
-                'out_for_delivery': OrderListSerializer(out_for_delivery, many=True).data,
-                'delivered': OrderListSerializer(delivered[:10], many=True).data  # Recent deliveries
+                'out_for_delivery': get_delivery_order_data(out_for_delivery),
+                'delivered': get_delivery_order_data(delivered[:10])  # Recent deliveries
             },
-            'my_deliveries': OrderListSerializer(my_deliveries, many=True).data,
-            'todays_deliveries': OrderListSerializer(todays_deliveries, many=True).data
+            'my_deliveries': get_delivery_order_data(my_deliveries),
+            'todays_deliveries': get_delivery_order_data(todays_deliveries)
         })
     
     @action(detail=True, methods=['post'])
