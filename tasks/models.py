@@ -238,6 +238,24 @@ class Task(models.Model):
                 message=f"Task '{self.title}' has been completed by {self.assigned_to.get_full_name() or self.assigned_to.username}"
             )
 
+            # Also notify warehouse supervisors/admins so it appears in their QA queue
+            try:
+                from users.models import User as UsersModel
+                supervisors = UsersModel.objects.filter(role__in=['warehouse', 'admin', 'owner'], is_active=True)
+                for sup in supervisors:
+                    # Avoid duplicate notification to the same assigned_by already notified
+                    if sup == self.assigned_by:
+                        continue
+                    TaskNotification.objects.create(
+                        task=self,
+                        recipient=sup,
+                        notification_type='task_completed',
+                        message=f"Task '{self.title}' completed by {self.assigned_to.get_full_name() or self.assigned_to.username} – awaiting QA approval"
+                    )
+            except Exception:
+                # Best-effort notifications; do not break completion if notification fails
+                pass
+
             # Recompute order production state
             self._update_order_after_task_change()
             return True

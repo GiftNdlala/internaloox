@@ -128,6 +128,32 @@ class TaskViewSet(viewsets.ModelViewSet):
         serializer = TaskListSerializer(tasks, many=True)
         return Response(serializer.data)
     
+    @action(detail=False, methods=['get'])
+    def qa_queue(self, request):
+        """Return tasks awaiting QA (completed, not yet approved/rejected). For supervisors."""
+        user = request.user
+        if user.role not in ['owner', 'admin', 'warehouse']:
+            return Response({'error': 'Access denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        qs = Task.objects.filter(
+            status='completed',
+            assigned_to__role__in=['warehouse_worker', 'warehouse']
+        ).select_related('assigned_to', 'assigned_by', 'task_type', 'order')
+
+        # Optional filters
+        order_id = request.query_params.get('order')
+        worker_id = request.query_params.get('worker')
+        if order_id:
+            qs = qs.filter(order_id=order_id)
+        if worker_id:
+            qs = qs.filter(assigned_to_id=worker_id)
+
+        data = TaskListSerializer(qs.order_by('-completed_at')[:100], many=True).data
+        return Response({
+            'count': qs.count(),
+            'results': data
+        })
+    
     @action(detail=True, methods=['post'])
     def perform_action(self, request, pk=None):
         """Perform actions on task (start, pause, complete, etc.)"""
@@ -653,8 +679,21 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
         # Time tracking for active task
         active_session = None
         time_elapsed_today = timedelta(0)
+        current_elapsed_seconds = 0
+        task_total_elapsed_seconds = 0
+        current_started_at = None
         if active_task:
             active_session = active_task.time_sessions.filter(ended_at__isnull=True).first()
+            # Compute current running elapsed in seconds and total including previous sessions
+            if active_session:
+                current_started_at = active_session.started_at
+                current_elapsed_seconds = int((timezone.now() - active_session.started_at).total_seconds())
+            # total_time_spent holds accumulated past sessions; add current one if running
+            try:
+                base_total = int(active_task.total_time_spent.total_seconds()) if active_task.total_time_spent else 0
+            except Exception:
+                base_total = 0
+            task_total_elapsed_seconds = base_total + (current_elapsed_seconds or 0)
             # Calculate total time worked today
             today_sessions = TaskTimeSession.objects.filter(
                 task__assigned_to=user,
@@ -701,7 +740,10 @@ class WarehouseDashboardViewSet(viewsets.ViewSet):
             'time_tracking': {
                 'time_elapsed_today': str(time_elapsed_today),
                 'time_elapsed_today_formatted': self._format_duration(time_elapsed_today),
-                'is_timer_running': active_task.is_timer_running if active_task else False
+                'is_timer_running': bool(active_task.is_timer_running) if active_task else False,
+                'current_session_started_at': current_started_at.isoformat() if current_started_at else None,
+                'current_elapsed_seconds': current_elapsed_seconds,
+                'task_total_elapsed_seconds': task_total_elapsed_seconds
             },
             'recent_tasks': TaskListSerializer(my_tasks.order_by('-updated_at')[:10], many=True).data,
             'completed_tasks_history': TaskListSerializer(completed_tasks, many=True).data,
