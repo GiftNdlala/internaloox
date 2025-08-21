@@ -96,7 +96,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
 	hex_color = serializers.SerializerMethodField(read_only=True)
 	# Convenience for UI display
 	total_price = serializers.SerializerMethodField(read_only=True)
-
+	
 	class Meta:
 		model = OrderItem
 		fields = [
