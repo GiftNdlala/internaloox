@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Filter, Search, Eye, Edit, Trash2, Plus, Download, Clock, AlertCircle, Image as ImageIcon } from 'lucide-react';
-import ProductImageUploader from './ProductImageUploader';
+import { Calendar, Filter, Search, Eye, Edit, Trash2, Plus, Download, Clock, AlertCircle } from 'lucide-react';
 
 const OrdersManagement = () => {
   const [orders, setOrders] = useState([]);
@@ -264,38 +263,6 @@ const OrdersManagement = () => {
                         <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
-                    {/* Quick product image uploader for the first product in the order (if any) */}
-                    {Array.isArray(order.items) && order.items.length > 0 && (
-                      <div className="mt-3 text-left">
-                        <div className="flex items-center gap-2 mb-2 text-gray-700">
-                          <ImageIcon className="h-4 w-4" />
-                          <span className="text-xs">Upload product image (first item)</span>
-                        </div>
-                        <ProductImageUploader
-                          productId={order.items[0].product}
-                          onUploaded={() => {
-                            // Reload orders to reflect image_url on payloads if needed
-                            (async () => {
-                              try {
-                                const token = localStorage.getItem('access_token');
-                                const response = await fetch('https://internaloox-1.onrender.com/api/orders/', {
-                                  headers: {
-                                    'Authorization': `Bearer ${token}`,
-                                    'Content-Type': 'application/json',
-                                  },
-                                });
-                                if (response.ok) {
-                                  const data = await response.json();
-                                  setOrders(data.results || data);
-                                }
-                              } catch (e) {
-                                console.error('Failed to refresh orders after upload', e);
-                              }
-                            })();
-                          }}
-                        />
-                      </div>
-                    )}
                   </td>
                 </tr>
               ))}
