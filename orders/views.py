@@ -405,8 +405,41 @@ class OrderViewSet(viewsets.ModelViewSet):
         return False
 
     def retrieve(self, request, *args, **kwargs):
-        """Override retrieve to add debugging"""
-        instance = self.get_object()
+        """Override retrieve to ensure detail page works across dashboard contexts.
+
+        Fetch the order by ID directly and enforce per-object visibility rules,
+        instead of relying on role-filtered queryset which can hide objects that
+        were listed via specialized dashboards.
+        """
+        from django.shortcuts import get_object_or_404
+        instance = get_object_or_404(Order, pk=kwargs.get('pk'))
+
+        # Per-object visibility: Owner/Admin always; otherwise align with role logic
+        user = request.user
+        if user.role not in ['owner', 'admin']:
+            can_view = False
+            if user.role in ['warehouse']:
+                can_view = (
+                    instance.assigned_to_warehouse_id == user.id or
+                    instance.order_status in ['deposit_paid', 'order_ready'] or
+                    instance.production_status in ['cutting', 'sewing', 'finishing', 'quality_check']
+                )
+            elif user.role in ['warehouse_worker']:
+                can_view = (
+                    instance.assigned_to_warehouse_id == user.id or
+                    instance.order_status in ['deposit_paid', 'order_ready']
+                )
+            elif user.role == 'delivery':
+                can_view = (
+                    instance.assigned_to_delivery_id == user.id or
+                    instance.order_status in ['order_ready', 'out_for_delivery']
+                )
+            else:
+                can_view = (instance.created_by_id == user.id)
+
+            if not can_view:
+                return Response({'detail': 'Not authorized to view this order.'}, status=status.HTTP_403_FORBIDDEN)
+
         serializer = self.get_serializer(instance)
         data = serializer.data
         print(f"RETRIEVING ORDER {instance.id}:")
@@ -1628,10 +1661,13 @@ class OrderViewSet(viewsets.ModelViewSet):
                 total_delta = order.total_amount
                 balance_delta = order.balance_amount
             elif payment_status == 'fully_paid' and old_values['payment_status'] != 'fully_paid':
-                # When status changes to fully_paid, show the remaining balance as delta
+                # When status changes to fully_paid, record payoff of previous outstanding balance
+                # If the client didn't explicitly set balance_amount, force it to zero
+                if balance_amount is None:
+                    order.balance_amount = 0
                 deposit_delta = 0
                 total_delta = 0
-                balance_delta = order.balance_amount
+                balance_delta = old_values['balance_amount']
             else:
                 # For amount updates, show the differences
                 deposit_delta = (order.deposit_amount - old_values['deposit_amount']) if deposit_amount is not None else 0
@@ -1641,6 +1677,11 @@ class OrderViewSet(viewsets.ModelViewSet):
             previous_balance = old_values['balance_amount']
             new_balance = order.balance_amount if balance_amount is not None else previous_balance
             amount_delta = previous_balance - new_balance  # positive means outstanding reduced
+
+            # For fully_paid transitions, ensure new_balance/amount_delta reflect payoff to zero
+            if payment_status == 'fully_paid' and old_values['payment_status'] != 'fully_paid':
+                new_balance = order.balance_amount
+                amount_delta = previous_balance - new_balance
             
             # Auto-calculate balance if not explicitly set
             if balance_amount is None and deposit_amount is not None:
