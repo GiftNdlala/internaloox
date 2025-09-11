@@ -2010,7 +2010,7 @@ class ProductViewSet(viewsets.ModelViewSet):
             'product': serializer.data
         }, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=['get'], url_path='main_image', permission_classes=[AllowAny])
+    @action(detail=True, methods=['get'], url_path='main_image', permission_classes=[AllowAny], authentication_classes=[])
     def stream_main_image(self, request, pk=None):
         """Stream the main image bytes inline. Public read-only access is allowed."""
         product = self.get_object()
