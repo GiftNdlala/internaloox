@@ -99,6 +99,16 @@ class TaskSerializer(serializers.ModelSerializer):
         item = getattr(obj, 'order_item', None)
         if not item:
             return None
+        # Build product image URL if available
+        product_image_url = None
+        try:
+            if item.product_id and getattr(item.product, 'main_image', None):
+                from django.urls import reverse
+                request = self.context.get('request') if hasattr(self, 'context') else None
+                url_path = reverse('orders:product-main-image', kwargs={'pk': item.product_id})
+                product_image_url = request.build_absolute_uri(url_path) if request else url_path
+        except Exception:
+            product_image_url = None
         return {
             'id': item.id,
             'product_name': getattr(item.product, 'product_name', None) or getattr(item.product, 'name', None),
@@ -106,6 +116,7 @@ class TaskSerializer(serializers.ModelSerializer):
             'unit_price': str(item.unit_price),
             'color_name': getattr(item, 'color_name', None),
             'fabric_name': getattr(item, 'fabric_name', None),
+            'product_image_url': product_image_url,
         }
 
 
@@ -132,6 +143,16 @@ class TaskListSerializer(serializers.ModelSerializer):
         item = getattr(obj, 'order_item', None)
         if not item:
             return None
+        # Build product image URL if available
+        product_image_url = None
+        try:
+            if item.product_id and getattr(item.product, 'main_image', None):
+                from django.urls import reverse
+                request = self.context.get('request') if hasattr(self, 'context') else None
+                url_path = reverse('orders:product-main-image', kwargs={'pk': item.product_id})
+                product_image_url = request.build_absolute_uri(url_path) if request else url_path
+        except Exception:
+            product_image_url = None
         return {
             'id': item.id,
             'product_name': getattr(item.product, 'product_name', None) or getattr(item.product, 'name', None),
@@ -139,6 +160,7 @@ class TaskListSerializer(serializers.ModelSerializer):
             'unit_price': str(item.unit_price),
             'color_name': getattr(item, 'color_name', None),
             'fabric_name': getattr(item, 'fabric_name', None),
+            'product_image_url': product_image_url,
         }
 
 

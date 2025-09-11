@@ -51,6 +51,8 @@ class Product(models.Model):
     available_fabrics = models.JSONField(default=list, blank=True, help_text="List of available fabrics for this product")
     color_images = models.JSONField(default=dict, blank=True, help_text="Image URLs for each color variant")
     fabric_samples = models.JSONField(default=dict, blank=True, help_text="Sample images for each fabric type")
+    # Binary main image bytes stored to match Supabase bytea column
+    main_image = models.BinaryField(null=True, blank=True, editable=True)
     
     class Meta:
         db_table = 'orders_product'

@@ -21,6 +21,7 @@ from .serializers import (
 )
 from .permissions import CanCreateProducts
 from django.db import models
+from django.urls import reverse
 
 class CustomerViewSet(viewsets.ModelViewSet):
     queryset = Customer.objects.all()
@@ -814,6 +815,9 @@ class OrderViewSet(viewsets.ModelViewSet):
                     'fabric_name': item.fabric_name,
                     'color_name': item.color_name,
                     'hex_color': hex_color,  # Include hex color for UI display
+                    'product_image_url': (request.build_absolute_uri(
+                        reverse('orders:product-main-image', kwargs={'pk': item.product_id})
+                    ) if (item.product_id and getattr(item.product, 'main_image', None)) else None),
                     'total_price': float(item.total_price)
                 })
                 
@@ -1241,6 +1245,9 @@ class OrderViewSet(viewsets.ModelViewSet):
                         'fabric_name': item.fabric_name,
                         'color_name': item.color_name,
                         'hex_color': hex_color,  # Include hex color for UI display
+                        'product_image_url': (request.build_absolute_uri(
+                            reverse('orders:product-main-image', kwargs={'pk': item.product_id})
+                        ) if (item.product_id and getattr(item.product, 'main_image', None)) else None),
                         'total_price': float(item.total_price)
                     })
                 
@@ -1963,6 +1970,67 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save()
+
+    @action(detail=True, methods=['post'], url_path='upload_main_image', permission_classes=[IsAuthenticated])
+    def upload_main_image(self, request, pk=None):
+        """Upload/replace the main image for a product.
+
+        Expects multipart/form-data with field 'file'. Enforces 5 MB limit.
+        """
+        product = self.get_object()
+        upload = request.FILES.get('file') or request.data.get('file')
+        if not upload:
+            return Response({'error': 'No file provided. Use field "file".'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Read bytes safely; handle InMemoryUploadedFile/TemporaryUploadedFile
+        try:
+            chunk_iter = getattr(upload, 'chunks', None)
+            if callable(chunk_iter):
+                # Stream to avoid memory spikes and check limit
+                max_bytes = 5 * 1024 * 1024
+                data = bytearray()
+                for chunk in upload.chunks():
+                    data.extend(chunk)
+                    if len(data) > max_bytes:
+                        return Response({'error': 'File exceeds 5 MB limit'}, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+                blob = bytes(data)
+            else:
+                blob = upload if isinstance(upload, (bytes, bytearray)) else upload.read()
+                if blob and len(blob) > 5 * 1024 * 1024:
+                    return Response({'error': 'File exceeds 5 MB limit'}, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+        except Exception as e:
+            return Response({'error': f'Failed to read upload: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        product.main_image = blob
+        product.save(update_fields=['main_image'])
+
+        serializer = self.get_serializer(product)
+        return Response({
+            'message': 'Main image uploaded successfully',
+            'product': serializer.data
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['get'], url_path='main_image', permission_classes=[AllowAny])
+    def stream_main_image(self, request, pk=None):
+        """Stream the main image bytes inline. Public read-only access is allowed."""
+        product = self.get_object()
+        if not product.main_image:
+            raise Http404('Image not found')
+        # Basic content-type detection via sniffing header bytes; default to image/jpeg
+        import imghdr
+        detected = imghdr.what(None, h=product.main_image[:32])
+        content_type = 'image/' + (detected or 'jpeg')
+        return HttpResponse(product.main_image, content_type=content_type)
+
+    @action(detail=True, methods=['delete'], url_path='main_image', permission_classes=[IsAuthenticated])
+    def delete_main_image(self, request, pk=None):
+        """Delete the main image from a product."""
+        product = self.get_object()
+        if not product.main_image:
+            return Response({'message': 'No image to delete'}, status=status.HTTP_200_OK)
+        product.main_image = None
+        product.save(update_fields=['main_image'])
+        return Response({'message': 'Main image deleted'}, status=status.HTTP_200_OK)
 
 class ColorReferenceViewSet(viewsets.ModelViewSet):
     queryset = ColorReference.objects.all()

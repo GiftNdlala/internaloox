@@ -525,9 +525,15 @@ class ProductSerializer(serializers.ModelSerializer):
 	colors = serializers.ListField(child=serializers.CharField(), read_only=True)
 	fabrics = serializers.ListField(child=serializers.CharField(), read_only=True)
 
+	# Derived fields for image exposure without raw bytes
+	main_image_url = serializers.SerializerMethodField(read_only=True)
+	main_image_size = serializers.SerializerMethodField(read_only=True)
+	main_image_present = serializers.SerializerMethodField(read_only=True)
+
 	class Meta:
 		model = Product
 		fields = '__all__'
+		read_only_fields = ['main_image']
 
 	def validate(self, attrs):
 		# Map name to product_name
@@ -686,6 +692,13 @@ class ProductSerializer(serializers.ModelSerializer):
 
 	def to_representation(self, instance):
 		data = super().to_representation(instance)
+		# Expose image URL info for frontend; raw bytes are hidden
+		data['main_image_url'] = self.get_main_image_url(instance)
+		data['main_image_size'] = self.get_main_image_size(instance)
+		data['main_image_present'] = self.get_main_image_present(instance)
+		# Ensure raw bytes field is not present in payload
+		if 'main_image' in data:
+			del data['main_image']
 		# Map fields back to frontend contract
 		data.setdefault('name', instance.product_name or instance.name)
 		data['price'] = str(self._response_price) if hasattr(self, '_response_price') else str(instance.unit_price or instance.base_price or 0)
@@ -713,6 +726,30 @@ class ProductSerializer(serializers.ModelSerializer):
 		if 'available_fabrics' in data:
 			del data['available_fabrics']
 		return data
+
+	def get_main_image_present(self, instance):
+		try:
+			return bool(getattr(instance, 'main_image', None))
+		except Exception:
+			return False
+
+	def get_main_image_size(self, instance):
+		try:
+			blob = getattr(instance, 'main_image', None)
+			return len(blob) if blob else 0
+		except Exception:
+			return 0
+
+	def get_main_image_url(self, instance):
+		try:
+			request = self.context.get('request') if hasattr(self, 'context') else None
+			if not getattr(instance, 'main_image', None):
+				return None
+			from django.urls import reverse
+			url_path = reverse('orders:product-main-image', kwargs={'pk': instance.pk})
+			return request.build_absolute_uri(url_path) if request else url_path
+		except Exception:
+			return None
 
 class ColorSerializer(serializers.ModelSerializer):
 	class Meta:
