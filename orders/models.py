@@ -272,7 +272,17 @@ class Order(models.Model):
     class Meta:
         ordering = ['-created_at']
     def __str__(self):
-        return f"Order #{self.order_number} - {self.customer.name}"
+        try:
+            customer_display = None
+            if self.customer and getattr(self.customer, 'name', None):
+                customer_display = self.customer.name
+            elif getattr(self, 'customer_name', None):
+                customer_display = self.customer_name
+            else:
+                customer_display = 'Unknown Customer'
+            return f"Order #{self.order_number} - {customer_display}"
+        except Exception:
+            return f"Order #{getattr(self, 'order_number', 'N/A')}"
     def save(self, *args, **kwargs):
         # Auto-generate order number if not provided
         if not self.order_number:
