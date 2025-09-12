@@ -156,6 +156,12 @@ class ProductOption(models.Model):
         return f"{self.product.name} - {self.option_type}: {self.value}"
 
 class Order(models.Model):
+    # Order type for new orders vs revamps/repairs
+    ORDER_TYPE_CHOICES = [
+        ('new_order', 'New Order'),
+        ('revamp', 'Revamp'),
+        ('repair', 'Repair'),
+    ]
     PAYMENT_STATUS_CHOICES = [
         ('deposit_pending', 'Deposit Pending'),
         ('deposit_paid', 'Deposit Paid'),
@@ -184,6 +190,7 @@ class Order(models.Model):
     ORDER_STATUS_CHOICES = [
         ('deposit_pending', 'Deposit Pending'),
         ('deposit_paid', 'Deposit Paid - In Queue'),
+        ('deposit_paid_laybuy', 'Deposit Paid - Lay-Buy'),
         ('order_ready', 'Order Ready'),
         ('out_for_delivery', 'Out for Delivery'),
         ('delivered', 'Delivered'),
@@ -197,6 +204,12 @@ class Order(models.Model):
     order_number = models.CharField(max_length=20, unique=True)
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='orders', blank=True, null=True)
     customer_name = models.CharField(max_length=200, blank=True, null=True, help_text="Optional internal tracking")
+    # Order type and Revamp/Repair specific fields
+    order_type = models.CharField(max_length=20, choices=ORDER_TYPE_CHOICES, default='new_order')
+    revamp_name = models.CharField(max_length=200, blank=True, null=True)
+    revamp_description = models.TextField(blank=True, null=True)
+    revamp_image = models.ImageField(upload_to='revamp_images/', blank=True, null=True)
+    revamp_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
     
     # MVP Financial Fields
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)
@@ -226,6 +239,34 @@ class Order(models.Model):
     admin_notes = models.TextField(blank=True)
     warehouse_notes = models.TextField(blank=True)
     delivery_notes = models.TextField(blank=True)
+    
+    # Lay-Buy specific fields
+    is_laybuy = models.BooleanField(default=False, help_text="Order is on lay-buy terms")
+    laybuy_terms = models.CharField(
+        max_length=100,
+        choices=[
+            ('30_days', '30 Days'),
+            ('60_days', '60 Days'),
+            ('90_days', '90 Days'),
+            ('custom', 'Custom Terms'),
+        ],
+        blank=True, null=True,
+        help_text="Lay-buy payment terms"
+    )
+    laybuy_due_date = models.DateField(blank=True, null=True, help_text="Final payment due date for lay-buy")
+    laybuy_balance = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text="Remaining balance on lay-buy")
+    laybuy_payments_made = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text="Total payments made on lay-buy")
+    laybuy_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('active', 'Active'),
+            ('overdue', 'Overdue'),
+            ('completed', 'Completed'),
+            ('cancelled', 'Cancelled'),
+        ],
+        default='active',
+        help_text="Current lay-buy status"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     class Meta:
