@@ -10,64 +10,149 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='order',
-            name='is_laybuy',
-            field=models.BooleanField(default=False, help_text='Order is on lay-buy terms'),
-        ),
-        migrations.AddField(
-            model_name='order',
-            name='laybuy_balance',
-            field=models.DecimalField(decimal_places=2, default=0, help_text='Remaining balance on lay-buy', max_digits=10),
-        ),
-        migrations.AddField(
-            model_name='order',
-            name='laybuy_due_date',
-            field=models.DateField(blank=True, help_text='Final payment due date for lay-buy', null=True),
-        ),
-        migrations.AddField(
-            model_name='order',
-            name='laybuy_payments_made',
-            field=models.DecimalField(decimal_places=2, default=0, help_text='Total payments made on lay-buy', max_digits=10),
-        ),
-        migrations.AddField(
-            model_name='order',
-            name='laybuy_status',
-            field=models.CharField(choices=[('active', 'Active'), ('overdue', 'Overdue'), ('completed', 'Completed'), ('cancelled', 'Cancelled')], default='active', help_text='Current lay-buy status', max_length=20),
-        ),
-        migrations.AddField(
-            model_name='order',
-            name='laybuy_terms',
-            field=models.CharField(blank=True, choices=[('30_days', '30 Days'), ('60_days', '60 Days'), ('90_days', '90 Days'), ('custom', 'Custom Terms')], help_text='Lay-buy payment terms', max_length=100, null=True),
-        ),
-        migrations.AddField(
-            model_name='order',
-            name='order_type',
-            field=models.CharField(choices=[('new_order', 'New Order'), ('revamp', 'Revamp'), ('repair', 'Repair')], default='new_order', max_length=20),
-        ),
-        migrations.AddField(
-            model_name='order',
-            name='revamp_description',
-            field=models.TextField(blank=True, null=True),
-        ),
-        migrations.AddField(
-            model_name='order',
-            name='revamp_image',
-            field=models.ImageField(blank=True, null=True, upload_to='revamp_images/'),
-        ),
-        migrations.AddField(
-            model_name='order',
-            name='revamp_name',
-            field=models.CharField(blank=True, max_length=200, null=True),
-        ),
-        migrations.AddField(
-            model_name='order',
-            name='revamp_price',
-            field=models.DecimalField(blank=True, decimal_places=2, max_digits=10, null=True),
-        ),
-        migrations.AlterField(
-            model_name='order',
-            name='order_status',
-            field=models.CharField(choices=[('deposit_pending', 'Deposit Pending'), ('deposit_paid', 'Deposit Paid - In Queue'), ('deposit_paid_laybuy', 'Deposit Paid - Lay-Buy'), ('order_ready', 'Order Ready'), ('out_for_delivery', 'Out for Delivery'), ('delivered', 'Delivered'), ('cancelled', 'Cancelled'), ('pending', 'Pending'), ('confirmed', 'Confirmed'), ('in_production', 'In Production'), ('ready_for_delivery', 'Ready for Delivery')], default='pending', max_length=20),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                # Lay-buy fields
+                migrations.RunSQL(
+                    sql=(
+                        "ALTER TABLE orders_order "
+                        "ADD COLUMN IF NOT EXISTS is_laybuy boolean DEFAULT false"
+                    ),
+                    reverse_sql="ALTER TABLE orders_order DROP COLUMN IF EXISTS is_laybuy",
+                ),
+                migrations.RunSQL(
+                    sql=(
+                        "ALTER TABLE orders_order "
+                        "ADD COLUMN IF NOT EXISTS laybuy_terms varchar(100)"
+                    ),
+                    reverse_sql="ALTER TABLE orders_order DROP COLUMN IF EXISTS laybuy_terms",
+                ),
+                migrations.RunSQL(
+                    sql=(
+                        "ALTER TABLE orders_order "
+                        "ADD COLUMN IF NOT EXISTS laybuy_due_date date"
+                    ),
+                    reverse_sql="ALTER TABLE orders_order DROP COLUMN IF EXISTS laybuy_due_date",
+                ),
+                migrations.RunSQL(
+                    sql=(
+                        "ALTER TABLE orders_order "
+                        "ADD COLUMN IF NOT EXISTS laybuy_balance numeric(10,2) DEFAULT 0"
+                    ),
+                    reverse_sql="ALTER TABLE orders_order DROP COLUMN IF EXISTS laybuy_balance",
+                ),
+                migrations.RunSQL(
+                    sql=(
+                        "ALTER TABLE orders_order "
+                        "ADD COLUMN IF NOT EXISTS laybuy_payments_made numeric(10,2) DEFAULT 0"
+                    ),
+                    reverse_sql="ALTER TABLE orders_order DROP COLUMN IF EXISTS laybuy_payments_made",
+                ),
+                migrations.RunSQL(
+                    sql=(
+                        "ALTER TABLE orders_order "
+                        "ADD COLUMN IF NOT EXISTS laybuy_status varchar(20) DEFAULT 'active'"
+                    ),
+                    reverse_sql="ALTER TABLE orders_order DROP COLUMN IF EXISTS laybuy_status",
+                ),
+                # Order type & revamp fields (may already exist on Supabase)
+                migrations.RunSQL(
+                    sql=(
+                        "ALTER TABLE orders_order "
+                        "ADD COLUMN IF NOT EXISTS order_type varchar(20) DEFAULT 'new_order'"
+                    ),
+                    reverse_sql="ALTER TABLE orders_order DROP COLUMN IF EXISTS order_type",
+                ),
+                migrations.RunSQL(
+                    sql=(
+                        "ALTER TABLE orders_order "
+                        "ADD COLUMN IF NOT EXISTS revamp_name varchar(200)"
+                    ),
+                    reverse_sql="ALTER TABLE orders_order DROP COLUMN IF EXISTS revamp_name",
+                ),
+                migrations.RunSQL(
+                    sql=(
+                        "ALTER TABLE orders_order "
+                        "ADD COLUMN IF NOT EXISTS revamp_description text"
+                    ),
+                    reverse_sql="ALTER TABLE orders_order DROP COLUMN IF EXISTS revamp_description",
+                ),
+                migrations.RunSQL(
+                    sql=(
+                        "ALTER TABLE orders_order "
+                        "ADD COLUMN IF NOT EXISTS revamp_image varchar(100)"
+                    ),
+                    reverse_sql="ALTER TABLE orders_order DROP COLUMN IF EXISTS revamp_image",
+                ),
+                migrations.RunSQL(
+                    sql=(
+                        "ALTER TABLE orders_order "
+                        "ADD COLUMN IF NOT EXISTS revamp_price numeric(10,2)"
+                    ),
+                    reverse_sql="ALTER TABLE orders_order DROP COLUMN IF EXISTS revamp_price",
+                ),
+            ],
+            state_operations=[
+                migrations.AddField(
+                    model_name='order',
+                    name='is_laybuy',
+                    field=models.BooleanField(default=False, help_text='Order is on lay-buy terms'),
+                ),
+                migrations.AddField(
+                    model_name='order',
+                    name='laybuy_balance',
+                    field=models.DecimalField(decimal_places=2, default=0, help_text='Remaining balance on lay-buy', max_digits=10),
+                ),
+                migrations.AddField(
+                    model_name='order',
+                    name='laybuy_due_date',
+                    field=models.DateField(blank=True, help_text='Final payment due date for lay-buy', null=True),
+                ),
+                migrations.AddField(
+                    model_name='order',
+                    name='laybuy_payments_made',
+                    field=models.DecimalField(decimal_places=2, default=0, help_text='Total payments made on lay-buy', max_digits=10),
+                ),
+                migrations.AddField(
+                    model_name='order',
+                    name='laybuy_status',
+                    field=models.CharField(choices=[('active', 'Active'), ('overdue', 'Overdue'), ('completed', 'Completed'), ('cancelled', 'Cancelled')], default='active', help_text='Current lay-buy status', max_length=20),
+                ),
+                migrations.AddField(
+                    model_name='order',
+                    name='laybuy_terms',
+                    field=models.CharField(blank=True, choices=[('30_days', '30 Days'), ('60_days', '60 Days'), ('90_days', '90 Days'), ('custom', 'Custom Terms')], help_text='Lay-buy payment terms', max_length=100, null=True),
+                ),
+                migrations.AddField(
+                    model_name='order',
+                    name='order_type',
+                    field=models.CharField(choices=[('new_order', 'New Order'), ('revamp', 'Revamp'), ('repair', 'Repair')], default='new_order', max_length=20),
+                ),
+                migrations.AddField(
+                    model_name='order',
+                    name='revamp_description',
+                    field=models.TextField(blank=True, null=True),
+                ),
+                migrations.AddField(
+                    model_name='order',
+                    name='revamp_image',
+                    field=models.ImageField(blank=True, null=True, upload_to='revamp_images/'),
+                ),
+                migrations.AddField(
+                    model_name='order',
+                    name='revamp_name',
+                    field=models.CharField(blank=True, max_length=200, null=True),
+                ),
+                migrations.AddField(
+                    model_name='order',
+                    name='revamp_price',
+                    field=models.DecimalField(blank=True, decimal_places=2, max_digits=10, null=True),
+                ),
+                migrations.AlterField(
+                    model_name='order',
+                    name='order_status',
+                    field=models.CharField(choices=[('deposit_pending', 'Deposit Pending'), ('deposit_paid', 'Deposit Paid - In Queue'), ('deposit_paid_laybuy', 'Deposit Paid - Lay-Buy'), ('order_ready', 'Order Ready'), ('out_for_delivery', 'Out for Delivery'), ('delivered', 'Delivered'), ('cancelled', 'Cancelled'), ('pending', 'Pending'), ('confirmed', 'Confirmed'), ('in_production', 'In Production'), ('ready_for_delivery', 'Ready for Delivery')], default='pending', max_length=20),
+                ),
+            ],
         ),
     ]
