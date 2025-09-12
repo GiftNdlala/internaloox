@@ -155,6 +155,9 @@ class OrderSerializer(serializers.ModelSerializer):
 	items = OrderItemSerializer(many=True, read_only=True)
 	# Add write-only items field for order creation
 	items_data = serializers.ListField(write_only=True, required=False)
+	# Order-level discount inputs (write-only)
+	order_discount_percent = serializers.DecimalField(max_digits=7, decimal_places=2, required=False, write_only=True)
+	order_discount_amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, write_only=True, help_text='Final total amount after discount')
 	total_amount = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
 	balance_amount = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
 	
@@ -167,15 +170,9 @@ class OrderSerializer(serializers.ModelSerializer):
 	
 	def validate(self, attrs):
 		# For updates, financial fields are optional
-		if self.instance:  # This is an update
+		if self.instance:  # update
 			return attrs
-		
-		# For creation, financial fields are required
-		if not attrs.get('total_amount'):
-			raise serializers.ValidationError({'total_amount': 'This field is required for new orders.'})
-		if not attrs.get('balance_amount'):
-			raise serializers.ValidationError({'balance_amount': 'This field is required for new orders.'})
-		
+		# For creation, allow totals to be computed from items and discounts in create()
 		return attrs
 	
 	def create(self, validated_data):
@@ -229,6 +226,72 @@ class OrderSerializer(serializers.ModelSerializer):
 				print(f"ORDER CREATE - Item {i}: {item}")
 				print(f"ORDER CREATE - Item {i} keys: {list(item.keys()) if isinstance(item, dict) else 'Not a dict'}")
 		
+		# Apply item-level discounts and compute order totals if not provided
+		from decimal import Decimal as _D
+		computed_subtotal = _D('0')
+		processed_items = []
+		for item in (items_data or []):
+			try:
+				quantity = _D(str(item.get('quantity', 1)))
+				base_unit_price = _D(str(item.get('unit_price', 0)))
+				# Item-specific discounts
+				disc_percent = item.get('discount_percent')
+				disc_amount_final = item.get('discount_amount')  # Final per-unit price after discount
+				effective_unit_price = base_unit_price
+				if disc_amount_final not in [None, "", 0, 0.0]:
+					effective_unit_price = _D(str(disc_amount_final))
+				elif disc_percent not in [None, "", 0, 0.0]:
+					p = _D(str(disc_percent))
+					if p < 0:
+						p = _D('0')
+					if p > 100:
+						p = _D('100')
+					effective_unit_price = (base_unit_price * (_D('100') - p) / _D('100')).quantize(_D('0.01'))
+				line_total = (effective_unit_price * quantity).quantize(_D('0.01'))
+				computed_subtotal += line_total
+				# Stash effective price for later creation
+				item['_effective_unit_price'] = str(effective_unit_price)
+			except Exception as e:
+				print(f"ORDER CREATE - Discount compute error on item: {e}")
+				# Fall back to provided values
+				try:
+					quantity = _D(str(item.get('quantity', 1)))
+					base_unit_price = _D(str(item.get('unit_price', 0)))
+					computed_subtotal += (base_unit_price * quantity)
+					item['_effective_unit_price'] = str(base_unit_price)
+				except Exception:
+					pass
+		
+		# Order-level discounts
+		order_discount_amount = self.initial_data.get('order_discount_amount')
+		order_discount_percent = self.initial_data.get('order_discount_percent')
+		computed_total = computed_subtotal
+		if order_discount_amount not in [None, ""]:
+			try:
+				final_total = _D(str(order_discount_amount))
+				if final_total >= 0:
+					computed_total = final_total
+			except Exception:
+				pass
+		elif order_discount_percent not in [None, "", 0, 0.0]:
+			try:
+				p = _D(str(order_discount_percent))
+				if p < 0:
+					p = _D('0')
+				if p > 100:
+					p = _D('100')
+				computed_total = (computed_subtotal * (_D('100') - p) / _D('100')).quantize(_D('0.01'))
+			except Exception:
+				pass
+		
+		# Set totals if not provided
+		if not validated_data.get('total_amount'):
+			validated_data['total_amount'] = computed_total
+		# Compute balance if not provided
+		if not validated_data.get('balance_amount'):
+			deposit = _D(str(validated_data.get('deposit_amount', 0) or 0))
+			validated_data['balance_amount'] = (computed_total - deposit).quantize(_D('0.01'))
+
 		validated_data.pop('items_data', None)
 		validated_data['created_by'] = self.context['request'].user
 		order = super().create(validated_data)
@@ -307,12 +370,17 @@ class OrderSerializer(serializers.ModelSerializer):
 				if fabric_fk_id and not Fabric.objects.filter(id=fabric_fk_id).exists():
 					fabric_fk_id = None
 
+				# Determine effective unit price if discount applied
+				effective_unit_price = item_data.get('_effective_unit_price')
+				if effective_unit_price is None:
+					effective_unit_price = item_data.get('unit_price')
+				
 				# Create the OrderItem
 				order_item = OrderItem.objects.create(
 					order=order,
 					product_id=item_data['product'],
 					quantity=item_data['quantity'],
-					unit_price=item_data['unit_price'],
+					unit_price=effective_unit_price,
 					assigned_color_code=(assigned_color_code or ''),
 					assigned_fabric_letter=(assigned_fabric_letter or ''),
 					color_id=color_fk_id,
