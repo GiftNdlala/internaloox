@@ -10,9 +10,19 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='product',
-            name='main_image',
-            field=models.BinaryField(blank=True, editable=True, null=True),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunSQL(
+                    sql="ALTER TABLE orders_product ADD COLUMN IF NOT EXISTS main_image bytea",
+                    reverse_sql="ALTER TABLE orders_product DROP COLUMN IF EXISTS main_image",
+                )
+            ],
+            state_operations=[
+                migrations.AddField(
+                    model_name='product',
+                    name='main_image',
+                    field=models.BinaryField(blank=True, editable=True, null=True),
+                ),
+            ],
         ),
     ]
