@@ -29,6 +29,15 @@ urlpatterns = [
     path('orders/<int:pk>/payment_transactions/', views.OrderViewSet.as_view({'get': 'payment_transactions'}), name='order_payment_transactions'),
     path('reports/payments_data/', views.OrderViewSet.as_view({'get': 'payments_data'}), name='payments_data'),
 
+    # Lay-Buy management
+    path('orders/<int:pk>/convert_to_laybuy/', views.OrderViewSet.as_view({'post': 'convert_to_laybuy'}), name='convert_to_laybuy'),
+    path('orders/<int:pk>/make_laybuy_payment/', views.OrderViewSet.as_view({'post': 'make_laybuy_payment'}), name='make_laybuy_payment'),
+    path('orders/<int:pk>/complete_laybuy/', views.OrderViewSet.as_view({'post': 'complete_laybuy'}), name='complete_laybuy'),
+    path('orders/laybuy_orders/', views.OrderViewSet.as_view({'get': 'laybuy_orders'}), name='laybuy_orders'),
+    path('orders/overdue_laybuy/', views.OrderViewSet.as_view({'get': 'overdue_laybuy'}), name='overdue_laybuy'),
+    path('orders/production_ready_orders/', views.OrderViewSet.as_view({'get': 'production_ready_orders'}), name='production_ready_orders'),
+    path('orders/laybuy_dashboard/', views.OrderViewSet.as_view({'get': 'laybuy_dashboard'}), name='laybuy_dashboard'),
+
     # Invoice/Delivery note data
     path('orders/<int:pk>/invoice_data/', views.OrderViewSet.as_view({'get': 'invoice_data'}), name='invoice_data'),
     path('orders/<int:pk>/delivery_note_data/', views.OrderViewSet.as_view({'get': 'delivery_note_data'}), name='delivery_note_data'),

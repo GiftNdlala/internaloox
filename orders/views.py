@@ -625,6 +625,244 @@ class OrderViewSet(viewsets.ModelViewSet):
             'expected_delivery_date': order.expected_delivery_date
         })
 
+    @action(detail=True, methods=['post'])
+    def convert_to_laybuy(self, request, pk=None):
+        """Convert regular order to lay-buy and set terms/deposit.
+
+        Expected body:
+        - deposit_amount: decimal
+        - laybuy_terms: one of 30_days|60_days|90_days|custom
+        - laybuy_due_date: YYYY-MM-DD (required if terms=custom)
+        - notes: optional
+        """
+        order = self.get_object()
+        user = request.user
+
+        if user.role not in ['owner', 'admin']:
+            return Response({'error': 'Only Owner/Admin can convert to lay-buy'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            deposit_amount = Decimal(str(request.data.get('deposit_amount', '0')))
+        except Exception:
+            return Response({'error': 'Invalid deposit_amount'}, status=status.HTTP_400_BAD_REQUEST)
+
+        laybuy_terms = request.data.get('laybuy_terms')
+        if laybuy_terms not in ['30_days', '60_days', '90_days', 'custom']:
+            return Response({'error': 'Invalid laybuy_terms'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Calculate due date
+        due_date = None
+        if laybuy_terms == 'custom':
+            due_date_str = request.data.get('laybuy_due_date')
+            if not due_date_str:
+                return Response({'error': 'laybuy_due_date required for custom terms'}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                from datetime import datetime
+                due_date = datetime.strptime(due_date_str, '%Y-%m-%d').date()
+            except Exception:
+                return Response({'error': 'Invalid laybuy_due_date format, expected YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            days = 30 if laybuy_terms == '30_days' else 60 if laybuy_terms == '60_days' else 90
+            due_date = (timezone.now() + timedelta(days=days)).date()
+
+        # Apply lay-buy flags and balances
+        order.is_laybuy = True
+        order.laybuy_terms = laybuy_terms
+        order.laybuy_due_date = due_date
+
+        # Update deposit and balance tracking
+        if deposit_amount and deposit_amount > 0:
+            order.deposit_amount = (order.deposit_amount or Decimal('0')) + deposit_amount
+        # Balance is total - deposit
+        order.balance_amount = (order.total_amount or Decimal('0')) - (order.deposit_amount or Decimal('0'))
+
+        # Lay-buy balances
+        order.laybuy_payments_made = (order.laybuy_payments_made or Decimal('0')) + deposit_amount
+        order.laybuy_balance = order.balance_amount
+        order.laybuy_status = 'active'
+
+        # Order status reflects lay-buy state
+        order.order_status = 'deposit_paid_laybuy'
+        order.save()
+
+        # Record transaction (optional linkage to proofs handled via separate endpoint)
+        try:
+            from .models import PaymentTransaction
+            PaymentTransaction.objects.create(
+                order=order,
+                actor_user=user,
+                deposit_delta=deposit_amount,
+                previous_balance=(order.balance_amount + deposit_amount),
+                new_balance=order.balance_amount,
+                amount_delta=deposit_amount,  # outstanding reduced by deposit
+                payment_method=request.data.get('payment_method'),
+                payment_status='deposit_paid',
+                notes=f"Converted to lay-buy ({laybuy_terms})"
+            )
+        except Exception:
+            pass
+
+        return Response({
+            'message': 'Order converted to lay-buy successfully',
+            'order_id': order.id,
+            'order_status': order.order_status,
+            'laybuy_due_date': order.laybuy_due_date,
+            'laybuy_balance': str(order.laybuy_balance),
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def make_laybuy_payment(self, request, pk=None):
+        """Apply a payment towards the lay-buy balance.
+
+        Expected body:
+        - amount: decimal (required)
+        - payment_method: optional
+        - proof_id: optional PaymentProof id
+        """
+        order = self.get_object()
+        user = request.user
+
+        if not order.is_laybuy:
+            return Response({'error': 'Order is not a lay-buy order'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            amount = Decimal(str(request.data.get('amount')))
+        except Exception:
+            return Response({'error': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
+        if amount <= 0:
+            return Response({'error': 'Amount must be positive'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Apply payment
+        previous_balance = order.laybuy_balance or order.balance_amount or Decimal('0')
+        order.laybuy_payments_made = (order.laybuy_payments_made or Decimal('0')) + amount
+        order.laybuy_balance = (order.laybuy_balance or previous_balance) - amount
+        if order.laybuy_balance < 0:
+            order.laybuy_balance = Decimal('0')
+        # Sync order balance
+        order.balance_amount = order.laybuy_balance
+
+        # Update statuses on completion
+        if order.laybuy_balance == 0:
+            order.laybuy_status = 'completed'
+            # When fully paid, move from lay-buy to normal queue
+            order.order_status = 'deposit_paid'
+        else:
+            # Keep active unless overdue by due date
+            order.laybuy_status = 'active'
+
+        order.save()
+
+        # Link proof if provided
+        proof = None
+        proof_id = request.data.get('proof_id')
+        if proof_id:
+            try:
+                from .models import PaymentProof
+                proof = PaymentProof.objects.filter(id=proof_id, order=order).first()
+            except Exception:
+                proof = None
+
+        # Record transaction
+        try:
+            from .models import PaymentTransaction
+            PaymentTransaction.objects.create(
+                order=order,
+                actor_user=user,
+                balance_delta=amount,
+                previous_balance=previous_balance,
+                new_balance=order.laybuy_balance,
+                amount_delta=amount,
+                payment_method=request.data.get('payment_method'),
+                payment_status=('fully_paid' if order.laybuy_balance == 0 else 'partial'),
+                proof=proof,
+                notes='Lay-buy payment'
+            )
+        except Exception:
+            pass
+
+        return Response({
+            'message': 'Lay-buy payment applied',
+            'laybuy_balance': str(order.laybuy_balance),
+            'laybuy_status': order.laybuy_status,
+            'order_status': order.order_status,
+        })
+
+    @action(detail=True, methods=['post'])
+    def complete_laybuy(self, request, pk=None):
+        """Complete lay-buy and move order into production queue if fully paid."""
+        order = self.get_object()
+        user = request.user
+
+        if user.role not in ['owner', 'admin']:
+            return Response({'error': 'Only Owner/Admin can complete lay-buy'}, status=status.HTTP_403_FORBIDDEN)
+
+        if not order.is_laybuy:
+            return Response({'error': 'Order is not a lay-buy order'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if order.laybuy_balance and order.laybuy_balance > 0:
+            return Response({'error': 'Cannot complete: outstanding lay-buy balance remains'}, status=status.HTTP_400_BAD_REQUEST)
+
+        order.laybuy_status = 'completed'
+        order.order_status = 'deposit_paid'
+        order.save()
+
+        return Response({
+            'message': 'Lay-buy completed; order moved to production queue',
+            'order_status': order.order_status,
+        })
+
+    @action(detail=False, methods=['get'])
+    def laybuy_orders(self, request):
+        """Get all active/overdue lay-buy orders."""
+        today = timezone.now().date()
+        queryset = Order.objects.filter(is_laybuy=True).filter(models.Q(laybuy_status__in=['active', 'overdue']) | models.Q(order_status='deposit_paid_laybuy'))
+        # Auto-flag overdue
+        queryset.filter(laybuy_due_date__lt=today, laybuy_status='active', laybuy_balance__gt=0).update(laybuy_status='overdue')
+        orders = OrderListSerializer(queryset.order_by('laybuy_due_date'), many=True).data
+        return Response({'orders': orders, 'count': len(orders)})
+
+    @action(detail=False, methods=['get'])
+    def overdue_laybuy(self, request):
+        """Get overdue lay-buy orders."""
+        today = timezone.now().date()
+        queryset = Order.objects.filter(is_laybuy=True, laybuy_balance__gt=0, laybuy_due_date__lt=today)
+        queryset.update(laybuy_status='overdue')
+        orders = OrderListSerializer(queryset.order_by('laybuy_due_date'), many=True).data
+        return Response({'orders': orders, 'count': len(orders)})
+
+    @action(detail=False, methods=['get'])
+    def production_ready_orders(self, request):
+        """Get orders ready for production (excludes lay-buy)"""
+        queryset = Order.objects.filter(
+            order_status__in=['deposit_paid', 'order_ready'],
+            production_status__in=['not_started', 'in_production', 'cutting', 'sewing', 'finishing', 'quality_check']
+        ).exclude(models.Q(order_status='deposit_paid_laybuy') | models.Q(is_laybuy=True))
+        return Response(OrderListSerializer(queryset.order_by('created_at'), many=True).data)
+
+    @action(detail=False, methods=['get'])
+    def laybuy_dashboard(self, request):
+        """Lay-buy management dashboard summary"""
+        if request.user.role not in ['owner', 'admin']:
+            return Response({'error': 'Access denied'}, status=status.HTTP_403_FORBIDDEN)
+        today = timezone.now().date()
+        base = Order.objects.filter(is_laybuy=True)
+        active = base.filter(laybuy_status='active')
+        overdue = base.filter(laybuy_status='overdue') | base.filter(laybuy_due_date__lt=today, laybuy_balance__gt=0)
+        completed = base.filter(laybuy_status='completed')
+        stats = {
+            'total_laybuy': base.count(),
+            'active': active.count(),
+            'overdue': overdue.count(),
+            'completed': completed.count(),
+            'outstanding_total': float(base.aggregate(total=Sum('laybuy_balance'))['total'] or 0)
+        }
+        return Response({
+            'statistics': stats,
+            'active': OrderListSerializer(active.order_by('laybuy_due_date')[:50], many=True).data,
+            'overdue': OrderListSerializer((overdue).order_by('laybuy_due_date')[:50], many=True).data,
+            'recent_completed': OrderListSerializer(completed.order_by('-updated_at')[:20], many=True).data,
+        })
+
     def list(self, request, *args, **kwargs):
         if not Order.objects.exists():
             # Return mock data for frontend testing
