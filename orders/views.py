@@ -2248,27 +2248,30 @@ class ProductViewSet(viewsets.ModelViewSet):
             'product': serializer.data
         }, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=['get'], url_path='main_image', permission_classes=[AllowAny], authentication_classes=[])
-    def stream_main_image(self, request, pk=None):
-        """Stream the main image bytes inline. Public read-only access is allowed."""
+    @action(detail=True, methods=['get', 'delete'], url_path='main_image', permission_classes=[AllowAny], authentication_classes=[])
+    def main_image(self, request, pk=None):
+        """Handle main image operations: GET to stream image, DELETE to remove image."""
         product = self.get_object()
-        if not product.main_image:
-            raise Http404('Image not found')
-        # Basic content-type detection via sniffing header bytes; default to image/jpeg
-        import imghdr
-        detected = imghdr.what(None, h=product.main_image[:32])
-        content_type = 'image/' + (detected or 'jpeg')
-        return HttpResponse(product.main_image, content_type=content_type)
-
-    @action(detail=True, methods=['delete'], url_path='main_image', permission_classes=[IsAuthenticated])
-    def delete_main_image(self, request, pk=None):
-        """Delete the main image from a product."""
-        product = self.get_object()
-        if not product.main_image:
-            return Response({'message': 'No image to delete'}, status=status.HTTP_200_OK)
-        product.main_image = None
-        product.save(update_fields=['main_image'])
-        return Response({'message': 'Main image deleted'}, status=status.HTTP_200_OK)
+        
+        if request.method == 'GET':
+            """Stream the main image bytes inline. Public read-only access is allowed."""
+            if not product.main_image:
+                raise Http404('Image not found')
+            # Basic content-type detection via sniffing header bytes; default to image/jpeg
+            import imghdr
+            detected = imghdr.what(None, h=product.main_image[:32])
+            content_type = 'image/' + (detected or 'jpeg')
+            return HttpResponse(product.main_image, content_type=content_type)
+        
+        elif request.method == 'DELETE':
+            """Delete the main image from a product. Requires authentication."""
+            if not request.user.is_authenticated:
+                return Response({'error': 'Authentication required'}, status=status.HTTP_401_UNAUTHORIZED)
+            if not product.main_image:
+                return Response({'message': 'No image to delete'}, status=status.HTTP_200_OK)
+            product.main_image = None
+            product.save(update_fields=['main_image'])
+            return Response({'message': 'Main image deleted'}, status=status.HTTP_200_OK)
 
 class ColorReferenceViewSet(viewsets.ModelViewSet):
     queryset = ColorReference.objects.all()
