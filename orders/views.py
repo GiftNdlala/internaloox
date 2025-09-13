@@ -2259,9 +2259,23 @@ class ProductViewSet(viewsets.ModelViewSet):
                 raise Http404('Image not found')
             # Basic content-type detection via sniffing header bytes; default to image/jpeg
             import imghdr
-            detected = imghdr.what(None, h=product.main_image[:32])
+            # Ensure we return raw bytes, not memoryview or other buffer types
+            blob = product.main_image
+            try:
+                if isinstance(blob, memoryview):
+                    blob_bytes = blob.tobytes()
+                elif isinstance(blob, (bytes, bytearray)):
+                    blob_bytes = bytes(blob)
+                else:
+                    # Fallback for any buffer-protocol types
+                    blob_bytes = bytes(blob)
+            except Exception:
+                # If conversion fails for some reason, treat as not found rather than 500
+                raise Http404('Image not found')
+
+            detected = imghdr.what(None, h=blob_bytes[:32])
             content_type = 'image/' + (detected or 'jpeg')
-            return HttpResponse(product.main_image, content_type=content_type)
+            return HttpResponse(blob_bytes, content_type=content_type)
         
         elif request.method == 'DELETE':
             """Delete the main image from a product. Requires authentication."""
