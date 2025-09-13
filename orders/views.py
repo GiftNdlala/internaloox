@@ -2257,8 +2257,7 @@ class ProductViewSet(viewsets.ModelViewSet):
             """Stream the main image bytes inline. Public read-only access is allowed."""
             if not product.main_image:
                 raise Http404('Image not found')
-            # Basic content-type detection via sniffing header bytes; default to image/jpeg
-            import imghdr
+            # Basic content-type detection via lightweight magic sniffing; default to image/jpeg
             # Ensure we return raw bytes, not memoryview or other buffer types
             blob = product.main_image
             try:
@@ -2273,8 +2272,17 @@ class ProductViewSet(viewsets.ModelViewSet):
                 # If conversion fails for some reason, treat as not found rather than 500
                 raise Http404('Image not found')
 
-            detected = imghdr.what(None, h=blob_bytes[:32])
-            content_type = 'image/' + (detected or 'jpeg')
+            header = blob_bytes[:16]
+            if header.startswith(b'\xff\xd8'):
+                content_type = 'image/jpeg'
+            elif header.startswith(b'\x89PNG\r\n\x1a\n'):
+                content_type = 'image/png'
+            elif header.startswith(b'GIF8'):
+                content_type = 'image/gif'
+            elif header.startswith(b'RIFF') and b'WEBP' in blob_bytes[:32]:
+                content_type = 'image/webp'
+            else:
+                content_type = 'image/jpeg'
             return HttpResponse(blob_bytes, content_type=content_type)
         
         elif request.method == 'DELETE':
