@@ -293,6 +293,9 @@ class OrderSerializer(serializers.ModelSerializer):
 			validated_data['balance_amount'] = (computed_total - deposit).quantize(_D('0.01'))
 
 		validated_data.pop('items_data', None)
+		# Remove write-only discount fields that don't exist on the model
+		validated_data.pop('order_discount_percent', None)
+		validated_data.pop('order_discount_amount', None)
 		validated_data['created_by'] = self.context['request'].user
 		order = super().create(validated_data)
 		
