@@ -147,6 +147,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
     "https://internaloox-frontend.onrender.com",
+    "https://internaloox-frontend-52go.onrender.com",
 ]
 
 # In production, allow all origins from .onrender.com
@@ -159,7 +160,7 @@ CORS_ALLOW_CREDENTIALS = True
 
 # CSRF trusted origins for cross-site requests (e.g., when using cookies)
 CSRF_TRUSTED_ORIGINS = [
-    "https://internaloox-frontend.onrender.com",
+    "https://internaloox-frontend-52go.onrender.com",
 ]
 
 # Custom user model
