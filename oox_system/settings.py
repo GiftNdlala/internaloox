@@ -146,7 +146,6 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3001",
     "http://localhost:8000",
     "http://127.0.0.1:8000",
-    "https://internaloox-frontend.onrender.com",
     "https://internaloox-frontend-52go.onrender.com",
 ]
 
