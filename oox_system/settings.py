@@ -11,7 +11,7 @@ SECRET_KEY = config('SECRET_KEY', default='django-insecure-your-secret-key-here'
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=True, cast=bool)
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '*.render.com', 'internaloox.onrender.com', 'internaloox-1.onrender.com', 'internaloox-frontend.onrender.com', 'testserver']
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '*.render.com', 'internaloox.onrender.com', 'internaloox-backend.onrender.com', 'internaloox-frontend-52go.onrender.com', 'testserver']
 
 # Application definition
 INSTALLED_APPS = [
